@@ -4,6 +4,7 @@ use colored::*;
 use std::path::PathBuf;
 
 mod models;
+mod zones;
 
 /// TrainRS - Training Load Analysis CLI
 ///
