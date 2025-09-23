@@ -97,11 +97,11 @@ impl Default for PmcConfig {
 /// Training Stress Balance interpretation ranges
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TsbInterpretation {
-    VeryFresh,      // +25 and above
-    Fresh,          // +5 to +25
-    Neutral,        // -10 to +5
-    Fatigued,       // -30 to -10
-    VeryFatigued,   // Below -30
+    VeryFresh,    // +25 and above
+    Fresh,        // +5 to +25
+    Neutral,      // -10 to +5
+    Fatigued,     // -30 to -10
+    VeryFatigued, // Below -30
 }
 
 impl TsbInterpretation {
@@ -134,11 +134,15 @@ impl TsbInterpretation {
     /// Get training recommendation
     pub fn recommendation(&self) -> &'static str {
         match self {
-            TsbInterpretation::VeryFresh => "Consider increasing training load or plan peak performance",
+            TsbInterpretation::VeryFresh => {
+                "Consider increasing training load or plan peak performance"
+            }
             TsbInterpretation::Fresh => "Good time for high-intensity sessions or racing",
             TsbInterpretation::Neutral => "Continue normal training progression",
             TsbInterpretation::Fatigued => "Reduce intensity, focus on recovery sessions",
-            TsbInterpretation::VeryFatigued => "Prioritize rest and recovery before resuming training",
+            TsbInterpretation::VeryFatigued => {
+                "Prioritize rest and recovery before resuming training"
+            }
         }
     }
 }
@@ -269,7 +273,8 @@ impl PmcCalculator {
 
             // Only include metrics for the requested date range
             if current_date >= start_date {
-                let ramp_rate = self.calculate_ctl_ramp_rate(&ctl_history, self.config.ramp_rate_days);
+                let ramp_rate =
+                    self.calculate_ctl_ramp_rate(&ctl_history, self.config.ramp_rate_days);
                 let atl_spike = self.detect_atl_spike(current_atl, &pmc_series);
 
                 pmc_series.push(PmcMetrics {
@@ -316,7 +321,8 @@ impl PmcCalculator {
             .rev()
             .take(7)
             .map(|m| m.atl)
-            .sum::<Decimal>() / Decimal::from(7);
+            .sum::<Decimal>()
+            / Decimal::from(7);
 
         current_atl > recent_atl_avg * self.config.atl_spike_threshold
     }
@@ -339,10 +345,7 @@ impl PmcCalculator {
         let tsb_trend = Self::determine_trend(first.tsb, last.tsb);
 
         // Calculate average CTL ramp rate
-        let ramp_rates: Vec<Decimal> = pmc_series
-            .iter()
-            .filter_map(|m| m.ctl_ramp_rate)
-            .collect();
+        let ramp_rates: Vec<Decimal> = pmc_series.iter().filter_map(|m| m.ctl_ramp_rate).collect();
 
         let avg_ctl_ramp_rate = if ramp_rates.is_empty() {
             Decimal::ZERO
@@ -414,9 +417,12 @@ impl PmcCalculator {
         // CTL ramp rate recommendations
         if let Some(ramp_rate) = metrics.ctl_ramp_rate {
             if ramp_rate > Decimal::from(8) {
-                recommendations.push("CTL ramp rate is aggressive - monitor for overreaching".to_string());
+                recommendations
+                    .push("CTL ramp rate is aggressive - monitor for overreaching".to_string());
             } else if ramp_rate < Decimal::from(-5) {
-                recommendations.push("CTL is declining rapidly - consider increasing training load".to_string());
+                recommendations.push(
+                    "CTL is declining rapidly - consider increasing training load".to_string(),
+                );
             }
         }
 
@@ -434,7 +440,8 @@ impl PmcCalculator {
                 recommendations.push("Good opportunity for high-quality training".to_string());
             }
             TsbInterpretation::VeryFatigued => {
-                recommendations.push("Prioritize sleep, nutrition, and active recovery".to_string());
+                recommendations
+                    .push("Prioritize sleep, nutrition, and active recovery".to_string());
             }
             _ => {}
         }
@@ -452,9 +459,9 @@ impl Default for PmcCalculator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{DataSource, Sport, WorkoutSummary, WorkoutType};
     use chrono::NaiveDate;
     use rust_decimal_macros::dec;
-    use crate::models::{DataSource, Sport, WorkoutType, WorkoutSummary};
 
     fn create_test_workout(date: NaiveDate, tss: Decimal) -> Workout {
         Workout {
@@ -510,7 +517,9 @@ mod tests {
         }
 
         let daily_tss = calculator.aggregate_daily_tss(&workouts);
-        let pmc_series = calculator.calculate_pmc_series(&daily_tss, start_date, end_date).unwrap();
+        let pmc_series = calculator
+            .calculate_pmc_series(&daily_tss, start_date, end_date)
+            .unwrap();
 
         // CTL should increase each day with consistent training
         assert!(pmc_series.len() > 0);
@@ -527,13 +536,19 @@ mod tests {
         let mut current_date = start_date;
         while current_date <= end_date {
             // Higher TSS on last day to test ATL response
-            let tss = if current_date == end_date { dec!(200) } else { dec!(50) };
+            let tss = if current_date == end_date {
+                dec!(200)
+            } else {
+                dec!(50)
+            };
             workouts.push(create_test_workout(current_date, tss));
             current_date = current_date.succ_opt().unwrap();
         }
 
         let daily_tss = calculator.aggregate_daily_tss(&workouts);
-        let pmc_series = calculator.calculate_pmc_series(&daily_tss, start_date, end_date).unwrap();
+        let pmc_series = calculator
+            .calculate_pmc_series(&daily_tss, start_date, end_date)
+            .unwrap();
 
         // ATL should respond quickly to the high TSS day
         let last_metrics = &pmc_series[pmc_series.len() - 1];
@@ -548,7 +563,9 @@ mod tests {
 
         let workouts = vec![create_test_workout(date, dec!(100))];
         let daily_tss = calculator.aggregate_daily_tss(&workouts);
-        let pmc_series = calculator.calculate_pmc_series(&daily_tss, date, date).unwrap();
+        let pmc_series = calculator
+            .calculate_pmc_series(&daily_tss, date, date)
+            .unwrap();
 
         let metrics = &pmc_series[0];
         // TSB = CTL_yesterday - ATL_today
@@ -558,11 +575,26 @@ mod tests {
 
     #[test]
     fn test_tsb_interpretation() {
-        assert_eq!(TsbInterpretation::from_tsb(dec!(30)), TsbInterpretation::VeryFresh);
-        assert_eq!(TsbInterpretation::from_tsb(dec!(10)), TsbInterpretation::Fresh);
-        assert_eq!(TsbInterpretation::from_tsb(dec!(0)), TsbInterpretation::Neutral);
-        assert_eq!(TsbInterpretation::from_tsb(dec!(-20)), TsbInterpretation::Fatigued);
-        assert_eq!(TsbInterpretation::from_tsb(dec!(-40)), TsbInterpretation::VeryFatigued);
+        assert_eq!(
+            TsbInterpretation::from_tsb(dec!(30)),
+            TsbInterpretation::VeryFresh
+        );
+        assert_eq!(
+            TsbInterpretation::from_tsb(dec!(10)),
+            TsbInterpretation::Fresh
+        );
+        assert_eq!(
+            TsbInterpretation::from_tsb(dec!(0)),
+            TsbInterpretation::Neutral
+        );
+        assert_eq!(
+            TsbInterpretation::from_tsb(dec!(-20)),
+            TsbInterpretation::Fatigued
+        );
+        assert_eq!(
+            TsbInterpretation::from_tsb(dec!(-40)),
+            TsbInterpretation::VeryFatigued
+        );
     }
 
     #[test]
@@ -576,13 +608,19 @@ mod tests {
         while current_date <= end_date {
             // Create spike on day 10
             let days_from_start = (current_date - start_date).num_days();
-            let tss = if days_from_start == 10 { dec!(300) } else { dec!(50) };
+            let tss = if days_from_start == 10 {
+                dec!(300)
+            } else {
+                dec!(50)
+            };
             workouts.push(create_test_workout(current_date, tss));
             current_date = current_date.succ_opt().unwrap();
         }
 
         let daily_tss = calculator.aggregate_daily_tss(&workouts);
-        let pmc_series = calculator.calculate_pmc_series(&daily_tss, start_date, end_date).unwrap();
+        let pmc_series = calculator
+            .calculate_pmc_series(&daily_tss, start_date, end_date)
+            .unwrap();
 
         // Should detect spike on high TSS day
         let spike_day = &pmc_series[10];
@@ -606,7 +644,9 @@ mod tests {
         }
 
         let daily_tss = calculator.aggregate_daily_tss(&workouts);
-        let pmc_series = calculator.calculate_pmc_series(&daily_tss, start_date, end_date).unwrap();
+        let pmc_series = calculator
+            .calculate_pmc_series(&daily_tss, start_date, end_date)
+            .unwrap();
 
         // Should show positive ramp rate with progressive overload
         let final_metrics = &pmc_series[pmc_series.len() - 1];
@@ -630,7 +670,9 @@ mod tests {
         }
 
         let daily_tss = calculator.aggregate_daily_tss(&workouts);
-        let pmc_series = calculator.calculate_pmc_series(&daily_tss, start_date, end_date).unwrap();
+        let pmc_series = calculator
+            .calculate_pmc_series(&daily_tss, start_date, end_date)
+            .unwrap();
         let trends = calculator.analyze_trends(&pmc_series).unwrap();
 
         assert_eq!(trends.ctl_trend, TrendDirection::Increasing);
@@ -683,7 +725,9 @@ mod tests {
 
         let workouts = vec![create_test_workout(date, dec!(100))];
         let daily_tss = calculator.aggregate_daily_tss(&workouts);
-        let pmc_series = calculator.calculate_pmc_series(&daily_tss, date, date).unwrap();
+        let pmc_series = calculator
+            .calculate_pmc_series(&daily_tss, date, date)
+            .unwrap();
 
         // With shorter time constants, metrics should respond more quickly
         assert!(!pmc_series.is_empty());

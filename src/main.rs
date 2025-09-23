@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use colored::*;
 use std::path::PathBuf;
 
+mod import;
 mod models;
 mod pmc;
 mod zones;
@@ -33,13 +34,21 @@ struct Cli {
 enum Commands {
     /// Import workout data from various sources
     Import {
-        /// Input file path (CSV, JSON, FIT)
-        #[arg(short, long)]
-        file: PathBuf,
+        /// Input file path (supports CSV, TCX, GPX, FIT)
+        #[arg(short, long, group = "input")]
+        file: Option<PathBuf>,
+
+        /// Import directory (batch import all supported files)
+        #[arg(short, long, group = "input")]
+        directory: Option<PathBuf>,
 
         /// File format (auto-detect if not specified)
-        #[arg(short = 'f', long)]
+        #[arg(long)]
         format: Option<String>,
+
+        /// Validate file without importing
+        #[arg(short, long)]
+        validate_only: bool,
     },
 
     /// Calculate training metrics (TSS, IF, NP, etc.)
@@ -123,14 +132,98 @@ fn main() -> Result<()> {
 
     // Handle commands
     match cli.command {
-        Commands::Import { file, format } => {
-            println!("{}", "Importing workout data...".green().bold());
-            println!("  File: {:?}", file);
-            if let Some(fmt) = format {
-                println!("  Format: {}", fmt);
+        Commands::Import {
+            file,
+            directory,
+            format,
+            validate_only,
+        } => {
+            use crate::import::ImportManager;
+
+            let manager = ImportManager::new();
+
+            if let Some(file_path) = file {
+                // Single file import
+                println!("{}", "Importing workout data...".green().bold());
+                println!("  File: {}", file_path.display());
+
+                if let Some(fmt) = format {
+                    println!("  Format: {}", fmt);
+                }
+
+                match if validate_only {
+                    manager.validate_file(&file_path).map(|_| Vec::new()) // Return empty vec for validation
+                } else {
+                    manager.import_file(&file_path)
+                } {
+                    Ok(workouts) => {
+                        if validate_only {
+                            println!("{}", "✓ File validation completed successfully".green());
+                        } else {
+                            println!(
+                                "{}",
+                                format!(
+                                    "✓ Import completed successfully: {} workouts imported",
+                                    workouts.len()
+                                )
+                                .green()
+                            );
+                            for workout in &workouts {
+                                println!(
+                                    "  - {} workout on {} ({} seconds)",
+                                    format!("{:?}", workout.sport).cyan(),
+                                    workout.date.format("%Y-%m-%d %H:%M:%S"),
+                                    workout.duration_seconds
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("{}", format!("✗ Import failed: {}", e).red());
+                        std::process::exit(1);
+                    }
+                }
+            } else if let Some(dir_path) = directory {
+                // Directory batch import
+                println!(
+                    "{}",
+                    "Importing workout data from directory...".green().bold()
+                );
+                println!("  Directory: {}", dir_path.display());
+
+                match manager.import_directory(&dir_path) {
+                    Ok(workouts) => {
+                        println!(
+                            "{}",
+                            format!(
+                                "✓ Batch import completed successfully: {} workouts imported",
+                                workouts.len()
+                            )
+                            .green()
+                        );
+
+                        // Group workouts by sport for summary
+                        let mut sport_counts = std::collections::HashMap::new();
+                        for workout in &workouts {
+                            *sport_counts.entry(workout.sport.clone()).or_insert(0) += 1;
+                        }
+
+                        for (sport, count) in sport_counts {
+                            println!("  - {:?}: {} workouts", sport, count);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("{}", format!("✗ Batch import failed: {}", e).red());
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                eprintln!(
+                    "{}",
+                    "Error: Must specify either --file or --directory".red()
+                );
+                std::process::exit(1);
             }
-            // TODO: Implement import functionality
-            println!("{}", "✓ Import completed successfully".green());
         }
 
         Commands::Calculate { from, to, athlete } => {
@@ -151,7 +244,10 @@ fn main() -> Result<()> {
         Commands::Analyze { period, predict } => {
             println!("{}", "Analyzing training patterns...".cyan().bold());
             println!("  Period: {} days", period);
-            println!("  Predictions: {}", if predict { "enabled" } else { "disabled" });
+            println!(
+                "  Predictions: {}",
+                if predict { "enabled" } else { "disabled" }
+            );
             // TODO: Implement analysis functionality
             println!("{}", "✓ Analysis completed".cyan());
         }
