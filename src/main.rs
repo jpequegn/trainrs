@@ -3,6 +3,8 @@ use clap::{Parser, Subcommand};
 use colored::*;
 use std::path::PathBuf;
 
+mod models;
+
 /// TrainRS - Training Load Analysis CLI
 ///
 /// A Rust-based tool for analyzing workout data and calculating training loads

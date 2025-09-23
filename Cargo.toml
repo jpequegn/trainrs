@@ -19,3 +19,6 @@ plotters = { version = "0.3", optional = true }
 [features]
 default = []
 charts = ["plotters"]
+
+[dev-dependencies]
+rust_decimal_macros = "1.36"
