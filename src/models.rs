@@ -207,6 +207,9 @@ pub struct AthleteProfile {
     /// Lactate Threshold Heart Rate
     pub lthr: Option<u16>,
 
+    /// Threshold pace for running (minutes per mile or km, depending on units)
+    pub threshold_pace: Option<Decimal>,
+
     /// Maximum Heart Rate
     pub max_hr: Option<u16>,
 
@@ -522,6 +525,7 @@ mod tests {
             height: Some(180),
             ftp: Some(250),
             lthr: Some(165),
+            threshold_pace: Some(dec!(6.0)),
             max_hr: Some(190),
             resting_hr: Some(50),
             training_zones: TrainingZones::default(),
@@ -571,6 +575,7 @@ mod tests {
             height: Some(165),
             ftp: Some(200),
             lthr: Some(155),
+            threshold_pace: Some(dec!(6.5)),
             max_hr: Some(185),
             resting_hr: Some(45),
             training_zones,
@@ -656,6 +661,7 @@ mod tests {
             height: Some(175),
             ftp: Some(275),
             lthr: Some(170),
+            threshold_pace: Some(dec!(5.5)),
             max_hr: Some(195),
             resting_hr: Some(48),
             training_zones: TrainingZones::default(),
