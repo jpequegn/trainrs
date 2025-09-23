@@ -1,0 +1,59 @@
+# Rust
+target/
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Data files (training data may be large or sensitive)
+data/raw/
+data/processed/
+*.csv
+*.json
+*.fit
+*.tcx
+
+# Test outputs
+test-outputs/
+coverage/
+
+# Performance profiling
+perf.data*
+flamegraph.svg
+
+# Backup files
+*~
+.backup/
+
+# Temporary files
+tmp/
+temp/
+
+# Build artifacts
+dist/
+build/
+
+# Documentation artifacts
+doc/target/
+
+# Environment files
+.env
+.env.local
+
+# SQLite databases (if used for local storage)
+*.db
+*.sqlite
+*.sqlite3
+
+# Binary releases
+releases/
