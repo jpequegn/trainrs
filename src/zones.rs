@@ -1,7 +1,7 @@
-use crate::models::{AthleteProfile, HeartRateZones, PowerZones, PaceZones, TrainingZones};
+use crate::models::{AthleteProfile, HeartRateZones, PaceZones, PowerZones, TrainingZones};
 use anyhow::{anyhow, Result};
-use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
 /// Errors that can occur during zone calculations
@@ -74,7 +74,9 @@ impl ZoneCalculator {
     /// - Z5: 106%+ MaxHR (VO2 Max)
     fn hr_zones_from_max_hr(profile: &AthleteProfile) -> Result<HeartRateZones> {
         let max_hr = profile.max_hr.ok_or_else(|| {
-            ZoneError::MissingThreshold("Max HR required for heart rate zone calculation".to_string())
+            ZoneError::MissingThreshold(
+                "Max HR required for heart rate zone calculation".to_string(),
+            )
         })?;
 
         Self::validate_heart_rate(max_hr, "Max HR")?;
@@ -130,7 +132,9 @@ impl ZoneCalculator {
     /// - Z5: < 100% threshold pace (VO2 Max - faster pace)
     pub fn calculate_pace_zones(profile: &AthleteProfile) -> Result<PaceZones> {
         let threshold_pace = profile.threshold_pace.ok_or_else(|| {
-            ZoneError::MissingThreshold("Threshold pace required for pace zone calculation".to_string())
+            ZoneError::MissingThreshold(
+                "Threshold pace required for pace zone calculation".to_string(),
+            )
         })?;
 
         Self::validate_pace(threshold_pace)?;
@@ -233,15 +237,19 @@ impl ZoneCalculator {
 
         // Convert to u16, ensuring it's within valid range
         if rounded < Decimal::ZERO {
-            return Err(anyhow!(ZoneError::CalculationError("Negative result".to_string())));
+            return Err(anyhow!(ZoneError::CalculationError(
+                "Negative result".to_string()
+            )));
         }
 
-        let as_u32 = rounded.to_u32().ok_or_else(|| {
-            ZoneError::CalculationError("Result too large for u16".to_string())
-        })?;
+        let as_u32 = rounded
+            .to_u32()
+            .ok_or_else(|| ZoneError::CalculationError("Result too large for u16".to_string()))?;
 
         if as_u32 > u16::MAX as u32 {
-            return Err(anyhow!(ZoneError::CalculationError("Result exceeds u16 range".to_string())));
+            return Err(anyhow!(ZoneError::CalculationError(
+                "Result exceeds u16 range".to_string()
+            )));
         }
 
         Ok(as_u32 as u16)
@@ -249,27 +257,30 @@ impl ZoneCalculator {
 
     fn validate_heart_rate(hr: u16, field_name: &str) -> Result<()> {
         if hr < 30 || hr > 220 {
-            return Err(anyhow!(ZoneError::InvalidThreshold(
-                format!("{} must be between 30 and 220 bpm, got {}", field_name, hr)
-            )));
+            return Err(anyhow!(ZoneError::InvalidThreshold(format!(
+                "{} must be between 30 and 220 bpm, got {}",
+                field_name, hr
+            ))));
         }
         Ok(())
     }
 
     fn validate_power(power: u16) -> Result<()> {
         if power < 50 || power > 800 {
-            return Err(anyhow!(ZoneError::InvalidThreshold(
-                format!("FTP must be between 50 and 800 watts, got {}", power)
-            )));
+            return Err(anyhow!(ZoneError::InvalidThreshold(format!(
+                "FTP must be between 50 and 800 watts, got {}",
+                power
+            ))));
         }
         Ok(())
     }
 
     fn validate_pace(pace: Decimal) -> Result<()> {
         if pace <= Decimal::ZERO || pace > dec!(20.0) {
-            return Err(anyhow!(ZoneError::InvalidThreshold(
-                format!("Threshold pace must be between 0 and 20 min/mile or min/km, got {}", pace)
-            )));
+            return Err(anyhow!(ZoneError::InvalidThreshold(format!(
+                "Threshold pace must be between 0 and 20 min/mile or min/km, got {}",
+                pace
+            ))));
         }
         Ok(())
     }
@@ -302,9 +313,10 @@ impl ThresholdEstimator {
     /// Estimate max heart rate from age (220 - age formula)
     pub fn estimate_max_hr_from_age(age: u8) -> Result<u16> {
         if age < 10 || age > 100 {
-            return Err(anyhow!(ZoneError::InvalidThreshold(
-                format!("Age must be between 10 and 100, got {}", age)
-            )));
+            return Err(anyhow!(ZoneError::InvalidThreshold(format!(
+                "Age must be between 10 and 100, got {}",
+                age
+            ))));
         }
         let max_hr = 220u16.saturating_sub(age as u16);
         Ok(max_hr)
@@ -365,7 +377,10 @@ impl ZoneAnalyzer {
     }
 
     /// Calculate zone distribution from power data
-    pub fn analyze_power_distribution(power_data: &[u16], zones: &PowerZones) -> PowerZoneDistribution {
+    pub fn analyze_power_distribution(
+        power_data: &[u16],
+        zones: &PowerZones,
+    ) -> PowerZoneDistribution {
         let mut zone_counts = [0u32; 7];
         let total_points = power_data.len() as u32;
 
@@ -665,7 +680,8 @@ mod tests {
         let power_data = vec![100, 150, 200, 250, 300, 350, 400, 500];
         let power_zones = ZoneCalculator::calculate_power_zones(&profile).unwrap();
 
-        let power_distribution = ZoneAnalyzer::analyze_power_distribution(&power_data, &power_zones);
+        let power_distribution =
+            ZoneAnalyzer::analyze_power_distribution(&power_data, &power_zones);
         assert_eq!(power_distribution.total_points, 8);
         assert!(power_distribution.zone1_percent > dec!(0.0));
     }
