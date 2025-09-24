@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use colored::*;
 use std::path::PathBuf;
 
+mod export;
 mod import;
 mod models;
 mod pmc;
@@ -84,9 +85,33 @@ enum Commands {
         #[arg(short, long)]
         output: PathBuf,
 
-        /// Export format (csv, json, html, pdf)
+        /// Export format (csv, json, text, html, pdf)
         #[arg(short = 'f', long, default_value = "csv")]
         format: String,
+
+        /// Export type (workouts, pmc, zones, weekly, monthly, report, trainingpeaks)
+        #[arg(short = 't', long, default_value = "workouts")]
+        export_type: String,
+
+        /// Start date for filtering (YYYY-MM-DD)
+        #[arg(long)]
+        from: Option<String>,
+
+        /// End date for filtering (YYYY-MM-DD)
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Specific athlete ID
+        #[arg(short, long)]
+        athlete: Option<String>,
+
+        /// Include raw data points (for supported formats)
+        #[arg(long)]
+        include_raw: bool,
+
+        /// Template name for specialized exports
+        #[arg(long)]
+        template: Option<String>,
     },
 
     /// Display training metrics in terminal
@@ -253,12 +278,114 @@ fn main() -> Result<()> {
             println!("{}", "✓ Analysis completed".cyan());
         }
 
-        Commands::Export { output, format } => {
+        Commands::Export {
+            output,
+            format,
+            export_type,
+            from,
+            to,
+            athlete,
+            include_raw,
+            template
+        } => {
             println!("{}", "Exporting data...".yellow().bold());
             println!("  Output: {:?}", output);
             println!("  Format: {}", format);
-            // TODO: Implement export functionality
-            println!("{}", "✓ Export completed successfully".yellow());
+            println!("  Type: {}", export_type);
+
+            if let Some(ref f) = from {
+                println!("  From: {}", f);
+            }
+            if let Some(ref t) = to {
+                println!("  To: {}", t);
+            }
+            if let Some(ref a) = athlete {
+                println!("  Athlete: {}", a);
+            }
+            if include_raw {
+                println!("  Including raw data");
+            }
+
+            use export::{ExportManager, ExportOptions, ExportFormat, ExportType, DateRange};
+            use chrono::NaiveDate;
+
+            // Parse export format
+            let export_format = match ExportFormat::from_str(&format) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("{}", format!("✗ Invalid format '{}': {}", format, e).red());
+                    std::process::exit(1);
+                }
+            };
+
+            // Parse export type
+            let export_type_enum = match export_type.to_lowercase().as_str() {
+                "workouts" | "workout" | "workout-summaries" => ExportType::WorkoutSummaries,
+                "pmc" | "pmc-data" => ExportType::PmcData,
+                "zones" | "zone-analysis" => ExportType::ZoneAnalysis,
+                "weekly" | "weekly-summary" => ExportType::WeeklySummary,
+                "monthly" | "monthly-summary" => ExportType::MonthlySummary,
+                "report" | "training-report" => ExportType::TrainingReport,
+                "trainingpeaks" | "training-peaks" => ExportType::TrainingPeaksFormat,
+                _ => {
+                    eprintln!("{}", format!("✗ Invalid export type '{}'", export_type).red());
+                    std::process::exit(1);
+                }
+            };
+
+            // Parse date range
+            let start_date = if let Some(from_str) = from {
+                match NaiveDate::parse_from_str(&from_str, "%Y-%m-%d") {
+                    Ok(date) => Some(date),
+                    Err(_) => {
+                        eprintln!("{}", format!("✗ Invalid start date format '{}'. Use YYYY-MM-DD", from_str).red());
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                None
+            };
+
+            let end_date = if let Some(to_str) = to {
+                match NaiveDate::parse_from_str(&to_str, "%Y-%m-%d") {
+                    Ok(date) => Some(date),
+                    Err(_) => {
+                        eprintln!("{}", format!("✗ Invalid end date format '{}'. Use YYYY-MM-DD", to_str).red());
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                None
+            };
+
+            let date_range = DateRange::new(start_date, end_date);
+
+            // Create export options
+            let export_options = ExportOptions {
+                format: export_format,
+                export_type: export_type_enum,
+                date_range,
+                include_raw_data: include_raw,
+                athlete_id: athlete,
+                template,
+            };
+
+            // For now, create some sample data since we don't have a data store yet
+            // TODO: Load actual workout data from storage
+            println!("{}", "Note: Using sample data - integrate with data storage in future".dimmed());
+
+            let sample_workouts = Vec::new(); // Empty for now
+            let export_manager = ExportManager::new();
+
+            match export_manager.export(&sample_workouts, None, &export_options, &output) {
+                Ok(_) => {
+                    println!("{}", "✓ Export completed successfully".green());
+                },
+                Err(e) => {
+                    eprintln!("{}", format!("✗ Export failed: {}", e).red());
+                    std::process::exit(1);
+                }
+            }
         }
 
         Commands::Display { format, limit } => {

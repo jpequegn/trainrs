@@ -29,3 +29,4 @@ charts = ["plotters"]
 
 [dev-dependencies]
 rust_decimal_macros = "1.36"
+tempfile = "3.8"
