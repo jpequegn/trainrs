@@ -1,6 +1,8 @@
 use anyhow::Result;
+use chrono::Datelike;
 use clap::{Parser, Subcommand};
 use colored::*;
+use rust_decimal::prelude::FromPrimitive;
 use std::path::PathBuf;
 
 mod export;
@@ -229,6 +231,45 @@ enum Commands {
         /// End date for summary (YYYY-MM-DD)
         #[arg(long)]
         to: Option<String>,
+    },
+
+    /// Performance Management Chart analysis and display
+    Pmc {
+        /// Number of recent days to display
+        #[arg(long)]
+        last_days: Option<u16>,
+
+        /// Start date for date range (YYYY-MM-DD)
+        #[arg(long)]
+        from: Option<String>,
+
+        /// End date for date range (YYYY-MM-DD)
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Filter by specific sport
+        #[arg(long)]
+        sport: Option<String>,
+
+        /// Show weekly summary instead of daily
+        #[arg(long)]
+        weekly: bool,
+
+        /// Show monthly summary instead of daily
+        #[arg(long)]
+        monthly: bool,
+
+        /// Show training load warnings
+        #[arg(long)]
+        show_warnings: bool,
+
+        /// Show trend analysis
+        #[arg(long)]
+        show_trends: bool,
+
+        /// Minimum TSS threshold for inclusion
+        #[arg(long)]
+        min_tss: Option<f64>,
     },
 
     /// Configure application settings
@@ -834,6 +875,141 @@ fn main() -> Result<()> {
             println!("{}", "✓ Summary generation completed".magenta());
         }
 
+        Commands::Pmc {
+            last_days,
+            from,
+            to,
+            sport,
+            weekly,
+            monthly,
+            show_warnings,
+            show_trends,
+            min_tss,
+        } => {
+            println!("{}", "Performance Management Chart Analysis".blue().bold());
+
+            // Handle global athlete flag
+            let athlete_id = cli.athlete.clone();
+            if let Some(a) = &athlete_id {
+                println!("  Athlete: {}", a);
+            }
+
+            // Determine date range
+            let end_date = if let Some(to_date) = to {
+                chrono::NaiveDate::parse_from_str(&to_date, "%Y-%m-%d")
+                    .map_err(|e| {
+                        eprintln!("{}", format!("✗ Invalid end date format: {}", e).red());
+                        std::process::exit(1);
+                    })
+                    .unwrap()
+            } else {
+                chrono::Local::now().date_naive()
+            };
+
+            let start_date = if let Some(from_date) = from {
+                chrono::NaiveDate::parse_from_str(&from_date, "%Y-%m-%d")
+                    .map_err(|e| {
+                        eprintln!("{}", format!("✗ Invalid start date format: {}", e).red());
+                        std::process::exit(1);
+                    })
+                    .unwrap()
+            } else if let Some(days) = last_days {
+                end_date - chrono::Duration::days(days as i64)
+            } else {
+                end_date - chrono::Duration::days(30) // Default to 30 days
+            };
+
+            if start_date > end_date {
+                eprintln!("{}", "✗ Start date must be before end date".red());
+                std::process::exit(1);
+            }
+
+            // Load workout data (placeholder - would need to load from database/files)
+            // For now, we'll create sample data
+            use crate::models::{Workout, WorkoutSummary, Sport, DataSource, WorkoutType};
+            use crate::pmc::PmcCalculator;
+            use rust_decimal::Decimal;
+            use rust_decimal_macros::dec;
+
+            println!("  Date range: {} to {}", start_date, end_date);
+            if let Some(ref sport_filter) = sport {
+                println!("  Sport filter: {}", sport_filter);
+            }
+            if let Some(min_tss_val) = min_tss {
+                println!("  Minimum TSS: {:.1}", min_tss_val);
+            }
+
+            // Create sample workout data for demonstration
+            let mut sample_workouts = Vec::new();
+            let mut current_date = start_date;
+            let mut day_counter = 0;
+
+            while current_date <= end_date {
+                // Simulate varying workout patterns
+                if day_counter % 7 != 6 { // Skip Sundays as rest days
+                    let base_tss = match day_counter % 7 {
+                        0 => 85,  // Monday - Moderate
+                        1 => 120, // Tuesday - Hard
+                        2 => 45,  // Wednesday - Easy
+                        3 => 140, // Thursday - Very Hard
+                        4 => 95,  // Friday - Moderate
+                        5 => 110, // Saturday - Hard
+                        _ => 0,   // Sunday - Rest
+                    };
+
+                    if base_tss > 0 {
+                        let workout = Workout {
+                            id: format!("workout_{}", current_date.format("%Y%m%d")),
+                            date: current_date,
+                            sport: Sport::Cycling,
+                            duration_seconds: (base_tss as f64 * 60.0) as u32, // Rough duration estimate
+                            workout_type: WorkoutType::Endurance,
+                            data_source: DataSource::Power,
+                            raw_data: None,
+                            summary: WorkoutSummary {
+                                tss: Some(Decimal::from(base_tss)),
+                                avg_heart_rate: Some(150 + (base_tss / 10) as u16),
+                                max_heart_rate: Some(180),
+                                avg_power: Some(220),
+                                normalized_power: Some(235),
+                                total_distance: Some(dec!(25000)), // 25km
+                                ..WorkoutSummary::default()
+                            },
+                            notes: Some("Sample workout".to_string()),
+                            athlete_id: athlete_id.clone(),
+                            source: Some("trainrs".to_string()),
+                        };
+                        sample_workouts.push(workout);
+                    }
+                }
+
+                current_date += chrono::Duration::days(1);
+                day_counter += 1;
+            }
+
+            // Apply sport filter if specified
+            if let Some(_sport_filter) = &sport {
+                // TODO: Filter by sport when we have sport parsing
+                println!("  Note: Sport filtering not yet implemented");
+            }
+
+            // Calculate PMC metrics
+            let pmc_calculator = PmcCalculator::new();
+            let daily_tss = pmc_calculator.aggregate_daily_tss(&sample_workouts);
+
+            match pmc_calculator.calculate_pmc_series(&daily_tss, start_date, end_date) {
+                Ok(pmc_metrics) => {
+                    display_pmc_table(&pmc_metrics, weekly, monthly, show_warnings, show_trends);
+                }
+                Err(e) => {
+                    eprintln!("{}", format!("✗ PMC calculation failed: {}", e).red());
+                    std::process::exit(1);
+                }
+            }
+
+            println!("{}", "✓ PMC analysis completed".blue());
+        }
+
         Commands::Config { list, set, get } => {
             println!("{}", "Managing configuration...".white().bold());
             if list {
@@ -851,4 +1027,379 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Display PMC data in tabular format with color coding and analysis
+fn display_pmc_table(
+    pmc_metrics: &[crate::pmc::PmcMetrics],
+    weekly: bool,
+    monthly: bool,
+    show_warnings: bool,
+    show_trends: bool,
+) {
+    use crate::pmc::TsbInterpretation;
+    use colored::Colorize;
+
+    if pmc_metrics.is_empty() {
+        println!("{}", "No PMC data to display".yellow());
+        return;
+    }
+
+    if weekly {
+        display_weekly_pmc_summary(pmc_metrics);
+    } else if monthly {
+        display_monthly_pmc_summary(pmc_metrics);
+    } else {
+        display_daily_pmc_table(pmc_metrics);
+    }
+
+    if show_trends {
+        display_training_trends(pmc_metrics);
+    }
+
+    if show_warnings {
+        display_training_warnings(pmc_metrics);
+    }
+
+    // Show current fitness summary
+    if let Some(latest) = pmc_metrics.last() {
+        let first = pmc_metrics.first().unwrap();
+        let ctl_change = latest.ctl - first.ctl;
+        let tsb_interp = TsbInterpretation::from_tsb(latest.tsb);
+
+        println!("\n📈 CURRENT FITNESS SUMMARY");
+        println!("==========================");
+        println!("Current Fitness (CTL): {:.1} ({:+.1} from period start)", latest.ctl, ctl_change);
+        println!("Current Fatigue (ATL): {:.1}", latest.atl);
+
+        let tsb_color = get_tsb_color_string(&latest.tsb);
+        println!("Current Form (TSB): {} - {}", tsb_color, tsb_interp.description());
+        println!("Training Recommendation: {}", tsb_interp.recommendation());
+    }
+}
+
+/// Display daily PMC data in table format
+fn display_daily_pmc_table(pmc_metrics: &[crate::pmc::PmcMetrics]) {
+
+    println!("\n📊 PERFORMANCE MANAGEMENT CHART - DAILY VIEW");
+    println!("============================================");
+
+    // Table header
+    println!("{:<12} │ {:<4} │ {:<5} │ {:<5} │ {:<6} │ {}",
+             "Date", "TSS", "CTL", "ATL", "TSB", "Status");
+    println!("─────────────┼──────┼───────┼───────┼────────┼─────────────");
+
+    for metrics in pmc_metrics {
+        let status_emoji = get_tsb_emoji(metrics.tsb);
+        let status_text = get_tsb_status_text(metrics.tsb);
+        let tsb_colored = get_tsb_color_string(&metrics.tsb);
+
+        println!("{:<12} │ {:>4} │ {:>5.1} │ {:>5.1} │ {:>6} │ {} {}",
+            metrics.date.format("%Y-%m-%d"),
+            if metrics.daily_tss > rust_decimal::Decimal::ZERO {
+                format!("{:.0}", metrics.daily_tss)
+            } else {
+                "0".to_string()
+            },
+            metrics.ctl,
+            metrics.atl,
+            tsb_colored,
+            status_emoji,
+            status_text
+        );
+    }
+}
+
+/// Display weekly PMC summary
+fn display_weekly_pmc_summary(pmc_metrics: &[crate::pmc::PmcMetrics]) {
+    use std::collections::HashMap;
+
+    println!("\n📊 PERFORMANCE MANAGEMENT CHART - WEEKLY SUMMARY");
+    println!("================================================");
+
+    // Group by weeks
+    let mut weekly_data: HashMap<chrono::IsoWeek, Vec<&crate::pmc::PmcMetrics>> = HashMap::new();
+
+    for metrics in pmc_metrics {
+        weekly_data.entry(metrics.date.iso_week()).or_default().push(metrics);
+    }
+
+    // Table header
+    println!("{:<15} │ {:<5} │ {:<5} │ {:<5} │ {:<6} │ {}",
+             "Week", "TSS", "CTL", "ATL", "TSB", "Status");
+    println!("────────────────┼───────┼───────┼───────┼────────┼─────────────");
+
+    let mut weeks: Vec<_> = weekly_data.keys().collect();
+    weeks.sort();
+
+    for week in weeks {
+        let week_metrics = &weekly_data[week];
+        let total_tss: rust_decimal::Decimal = week_metrics.iter()
+            .map(|m| m.daily_tss)
+            .sum();
+
+        let avg_ctl: rust_decimal::Decimal = week_metrics.iter()
+            .map(|m| m.ctl)
+            .sum::<rust_decimal::Decimal>() / rust_decimal::Decimal::from(week_metrics.len());
+
+        let avg_atl: rust_decimal::Decimal = week_metrics.iter()
+            .map(|m| m.atl)
+            .sum::<rust_decimal::Decimal>() / rust_decimal::Decimal::from(week_metrics.len());
+
+        let avg_tsb: rust_decimal::Decimal = week_metrics.iter()
+            .map(|m| m.tsb)
+            .sum::<rust_decimal::Decimal>() / rust_decimal::Decimal::from(week_metrics.len());
+
+        let status_emoji = get_tsb_emoji(avg_tsb);
+        let status_text = get_tsb_status_text(avg_tsb);
+        let tsb_colored = get_tsb_color_string(&avg_tsb);
+
+        println!("{:<15} │ {:>5.0} │ {:>5.1} │ {:>5.1} │ {:>6} │ {} {}",
+            format!("{}-W{:02}", week.year(), week.week()),
+            total_tss,
+            avg_ctl,
+            avg_atl,
+            tsb_colored,
+            status_emoji,
+            status_text
+        );
+    }
+}
+
+/// Display monthly PMC summary
+fn display_monthly_pmc_summary(pmc_metrics: &[crate::pmc::PmcMetrics]) {
+    use std::collections::HashMap;
+
+    println!("\n📊 PERFORMANCE MANAGEMENT CHART - MONTHLY SUMMARY");
+    println!("=================================================");
+
+    // Group by months (year-month)
+    let mut monthly_data: HashMap<(i32, u32), Vec<&crate::pmc::PmcMetrics>> = HashMap::new();
+
+    for metrics in pmc_metrics {
+        let key = (metrics.date.year(), metrics.date.month());
+        monthly_data.entry(key).or_default().push(metrics);
+    }
+
+    // Table header
+    println!("{:<10} │ {:<5} │ {:<5} │ {:<5} │ {:<6} │ {}",
+             "Month", "TSS", "CTL", "ATL", "TSB", "Status");
+    println!("───────────┼───────┼───────┼───────┼────────┼─────────────");
+
+    let mut months: Vec<_> = monthly_data.keys().collect();
+    months.sort();
+
+    for (year, month) in months {
+        let month_metrics = &monthly_data[&(*year, *month)];
+        let total_tss: rust_decimal::Decimal = month_metrics.iter()
+            .map(|m| m.daily_tss)
+            .sum();
+
+        // Use end-of-month values for CTL/ATL/TSB
+        let last_metric = month_metrics.last().unwrap();
+
+        let status_emoji = get_tsb_emoji(last_metric.tsb);
+        let status_text = get_tsb_status_text(last_metric.tsb);
+        let tsb_colored = get_tsb_color_string(&last_metric.tsb);
+
+        println!("{:<10} │ {:>5.0} │ {:>5.1} │ {:>5.1} │ {:>6} │ {} {}",
+            format!("{}-{:02}", year, month),
+            total_tss,
+            last_metric.ctl,
+            last_metric.atl,
+            tsb_colored,
+            status_emoji,
+            status_text
+        );
+    }
+}
+
+/// Display training trends analysis
+fn display_training_trends(pmc_metrics: &[crate::pmc::PmcMetrics]) {
+    use colored::Colorize;
+
+    if pmc_metrics.len() < 7 {
+        return; // Need at least a week of data for trends
+    }
+
+    println!("\n📈 TRAINING LOAD TRENDS");
+    println!("=======================");
+
+    let first = pmc_metrics.first().unwrap();
+    let last = pmc_metrics.last().unwrap();
+    let period_days = (last.date - first.date).num_days() as f64;
+
+    // CTL trend
+    let ctl_change = last.ctl - first.ctl;
+    let ctl_rate = ctl_change / rust_decimal::Decimal::from_f64(period_days / 7.0).unwrap();
+    let ctl_trend = if ctl_change > rust_decimal::Decimal::from(2) {
+        "📈 Building".green()
+    } else if ctl_change < rust_decimal::Decimal::from(-2) {
+        "📉 Declining".red()
+    } else {
+        "➡️ Stable".yellow()
+    };
+
+    println!("CTL (Fitness):     {:>6.1} → {:>6.1} ({:+.1}/week) {}",
+             first.ctl, last.ctl, ctl_rate, ctl_trend);
+
+    // ATL trend
+    let atl_change = last.atl - first.atl;
+    let atl_rate = atl_change / rust_decimal::Decimal::from_f64(period_days / 7.0).unwrap();
+    let atl_trend = if atl_change > rust_decimal::Decimal::from(3) {
+        "⚡ High fatigue".red()
+    } else if atl_change < rust_decimal::Decimal::from(-3) {
+        "😌 Recovering".green()
+    } else {
+        "➡️ Normal".yellow()
+    };
+
+    println!("ATL (Fatigue):     {:>6.1} → {:>6.1} ({:+.1}/week) {}",
+             first.atl, last.atl, atl_rate, atl_trend);
+
+    // TSB trend
+    let tsb_change = last.tsb - first.tsb;
+    let tsb_trend = if tsb_change > rust_decimal::Decimal::from(5) {
+        "🟢 Getting fresher".green()
+    } else if tsb_change < rust_decimal::Decimal::from(-5) {
+        "🔴 Getting fatigued".red()
+    } else {
+        "🟡 Steady form".yellow()
+    };
+
+    println!("TSB (Form):        {:>6.1} → {:>6.1} ({:+.1} change) {}",
+             first.tsb, last.tsb, tsb_change, tsb_trend);
+
+    // Ramp rate analysis
+    let mut rapid_increases = 0;
+    for window in pmc_metrics.windows(7) {
+        if let (Some(start), Some(end)) = (window.first(), window.last()) {
+            let weekly_ctl_change = end.ctl - start.ctl;
+            if weekly_ctl_change > rust_decimal::Decimal::from(5) {
+                rapid_increases += 1;
+            }
+        }
+    }
+
+    if rapid_increases > 0 {
+        println!("⚠️  Detected {} week(s) with rapid fitness increases", rapid_increases);
+    }
+}
+
+/// Display training warnings
+fn display_training_warnings(pmc_metrics: &[crate::pmc::PmcMetrics]) {
+    use colored::Colorize;
+
+    println!("\n⚠️  TRAINING LOAD WARNINGS");
+    println!("=========================");
+
+    let mut warnings = Vec::new();
+
+    // Check for extended negative TSB (overtraining risk)
+    let mut negative_tsb_streak = 0;
+    let mut max_negative_streak = 0;
+    for metrics in pmc_metrics {
+        if metrics.tsb < rust_decimal::Decimal::from(-10) {
+            negative_tsb_streak += 1;
+            max_negative_streak = max_negative_streak.max(negative_tsb_streak);
+        } else {
+            negative_tsb_streak = 0;
+        }
+    }
+
+    if max_negative_streak >= 7 {
+        warnings.push(format!("🔴 Extended fatigue period: {} days with TSB < -10", max_negative_streak).red());
+    }
+
+    // Check for extended positive TSB (fitness loss risk)
+    let mut positive_tsb_streak = 0;
+    let mut max_positive_streak = 0;
+    for metrics in pmc_metrics {
+        if metrics.tsb > rust_decimal::Decimal::from(15) {
+            positive_tsb_streak += 1;
+            max_positive_streak = max_positive_streak.max(positive_tsb_streak);
+        } else {
+            positive_tsb_streak = 0;
+        }
+    }
+
+    if max_positive_streak >= 7 {
+        warnings.push(format!("🟡 Extended recovery period: {} days with TSB > 15 (fitness loss risk)", max_positive_streak).yellow());
+    }
+
+    // Check for rapid CTL increases (injury risk)
+    for window in pmc_metrics.windows(7) {
+        if let (Some(start), Some(end)) = (window.first(), window.last()) {
+            let weekly_ctl_change = end.ctl - start.ctl;
+            if weekly_ctl_change > rust_decimal::Decimal::from(8) {
+                warnings.push(format!("🔴 Rapid fitness increase detected: +{:.1} CTL in week ending {}",
+                    weekly_ctl_change, end.date.format("%Y-%m-%d")).red());
+            }
+        }
+    }
+
+    // Check for ATL spikes
+    let mut atl_spikes = 0;
+    for metrics in pmc_metrics {
+        if metrics.atl_spike {
+            atl_spikes += 1;
+        }
+    }
+
+    if atl_spikes > 0 {
+        warnings.push(format!("⚡ {} ATL spike(s) detected (high acute load)", atl_spikes).yellow());
+    }
+
+    if warnings.is_empty() {
+        println!("{}", "✅ No training load warnings detected".green());
+    } else {
+        for warning in warnings {
+            println!("{}", warning);
+        }
+    }
+}
+
+/// Get emoji for TSB value
+fn get_tsb_emoji(tsb: rust_decimal::Decimal) -> &'static str {
+    if tsb >= rust_decimal::Decimal::from(25) {
+        "🟢"
+    } else if tsb >= rust_decimal::Decimal::from(5) {
+        "🟢"
+    } else if tsb >= rust_decimal::Decimal::from(-10) {
+        "🟡"
+    } else if tsb >= rust_decimal::Decimal::from(-30) {
+        "🟠"
+    } else {
+        "🔴"
+    }
+}
+
+/// Get status text for TSB value
+fn get_tsb_status_text(tsb: rust_decimal::Decimal) -> &'static str {
+    use crate::pmc::TsbInterpretation;
+    match TsbInterpretation::from_tsb(tsb) {
+        crate::pmc::TsbInterpretation::VeryFresh => "Very Fresh",
+        crate::pmc::TsbInterpretation::Fresh => "Fresh",
+        crate::pmc::TsbInterpretation::Neutral => "Neutral",
+        crate::pmc::TsbInterpretation::Fatigued => "Fatigued",
+        crate::pmc::TsbInterpretation::VeryFatigued => "Very Fatigued",
+    }
+}
+
+/// Get colored string for TSB value
+fn get_tsb_color_string(tsb: &rust_decimal::Decimal) -> String {
+    use colored::Colorize;
+    let tsb_str = format!("{:+.1}", tsb);
+
+    if *tsb >= rust_decimal::Decimal::from(25) {
+        tsb_str.bright_green().to_string()
+    } else if *tsb >= rust_decimal::Decimal::from(5) {
+        tsb_str.green().to_string()
+    } else if *tsb >= rust_decimal::Decimal::from(-10) {
+        tsb_str.yellow().to_string()
+    } else if *tsb >= rust_decimal::Decimal::from(-30) {
+        tsb_str.bright_red().to_string()
+    } else {
+        tsb_str.red().bold().to_string()
+    }
 }
