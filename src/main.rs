@@ -6,6 +6,7 @@ use std::path::PathBuf;
 mod import;
 mod models;
 mod pmc;
+mod tss;
 mod zones;
 
 /// TrainRS - Training Load Analysis CLI
