@@ -3,7 +3,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 /// Sport types supported by the training analysis system
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Sport {
     Running,
     Cycling,
@@ -494,11 +494,11 @@ mod tests {
     #[test]
     fn test_pace_zones() {
         let pace_zones = PaceZones {
-            zone1_min: dec!(9.0),  // Easy pace (slowest)
-            zone2_min: dec!(8.0),  // Aerobic pace
-            zone3_min: dec!(7.0),  // Tempo pace
-            zone4_min: dec!(6.5),  // Threshold pace
-            zone5_min: dec!(6.0),  // VO2 Max pace (fastest)
+            zone1_min: dec!(9.0), // Easy pace (slowest)
+            zone2_min: dec!(8.0), // Aerobic pace
+            zone3_min: dec!(7.0), // Tempo pace
+            zone4_min: dec!(6.5), // Threshold pace
+            zone5_min: dec!(6.0), // VO2 Max pace (fastest)
         };
 
         assert_eq!(pace_zones.zone1_min, dec!(9.0));
@@ -608,18 +608,16 @@ mod tests {
             duration_seconds: 7200,
             workout_type: WorkoutType::Interval,
             data_source: DataSource::Power,
-            raw_data: Some(vec![
-                DataPoint {
-                    timestamp: 0,
-                    heart_rate: Some(110),
-                    power: Some(150),
-                    pace: None,
-                    elevation: Some(100),
-                    cadence: Some(85),
-                    speed: Some(dec!(8.5)),
-                    distance: Some(dec!(0.0)),
-                },
-            ]),
+            raw_data: Some(vec![DataPoint {
+                timestamp: 0,
+                heart_rate: Some(110),
+                power: Some(150),
+                pace: None,
+                elevation: Some(100),
+                cadence: Some(85),
+                speed: Some(dec!(8.5)),
+                distance: Some(dec!(0.0)),
+            }]),
             summary: WorkoutSummary {
                 avg_heart_rate: Some(155),
                 max_heart_rate: Some(180),
@@ -680,5 +678,81 @@ mod tests {
         assert_eq!(deserialized.id, profile.id);
         assert_eq!(deserialized.ftp, profile.ftp);
         assert_eq!(deserialized.preferred_units, profile.preferred_units);
+    }
+}
+
+// Implementation methods for integration with zone calculations
+impl AthleteProfile {
+    /// Calculate and update training zones based on current thresholds
+    pub fn calculate_zones(&mut self) -> Result<(), crate::zones::ZoneError> {
+        self.training_zones = crate::zones::ZoneCalculator::calculate_all_zones(self);
+        self.updated_at = chrono::Utc::now();
+        Ok(())
+    }
+
+    /// Check if athlete has sufficient thresholds for zone calculations
+    pub fn has_heart_rate_thresholds(&self) -> bool {
+        self.lthr.is_some() || self.max_hr.is_some()
+    }
+
+    pub fn has_power_thresholds(&self) -> bool {
+        self.ftp.is_some()
+    }
+
+    pub fn has_pace_thresholds(&self) -> bool {
+        self.threshold_pace.is_some()
+    }
+
+    /// Get age from date of birth
+    pub fn age(&self) -> Option<u8> {
+        self.date_of_birth.map(|dob| {
+            let today = chrono::Utc::now().date_naive();
+            let age_duration = today.signed_duration_since(dob);
+            let age_years = age_duration.num_days() / 365;
+            (age_years as u8).min(255)
+        })
+    }
+
+    /// Estimate missing thresholds based on available data
+    pub fn estimate_missing_thresholds(&mut self) -> Result<(), crate::zones::ZoneError> {
+        // Estimate max HR from age if missing
+        if self.max_hr.is_none() && self.age().is_some() {
+            let age = self.age().unwrap();
+            match crate::zones::ThresholdEstimator::estimate_max_hr_from_age(age) {
+                Ok(max_hr) => self.max_hr = Some(max_hr),
+                Err(e) => return Err(crate::zones::ZoneError::InvalidThreshold(e.to_string())),
+            }
+        }
+
+        self.updated_at = chrono::Utc::now();
+        Ok(())
+    }
+}
+
+impl TrainingZones {
+    /// Check if any zones are configured
+    pub fn has_any_zones(&self) -> bool {
+        self.heart_rate_zones.is_some() || self.power_zones.is_some() || self.pace_zones.is_some()
+    }
+
+    /// Get zone for a heart rate value
+    pub fn get_hr_zone(&self, heart_rate: u16) -> Option<u8> {
+        self.heart_rate_zones
+            .as_ref()
+            .map(|zones| crate::zones::ZoneCalculator::get_heart_rate_zone(heart_rate, zones))
+    }
+
+    /// Get zone for a power value
+    pub fn get_power_zone(&self, power: u16) -> Option<u8> {
+        self.power_zones
+            .as_ref()
+            .map(|zones| crate::zones::ZoneCalculator::get_power_zone(power, zones))
+    }
+
+    /// Get zone for a pace value
+    pub fn get_pace_zone(&self, pace: rust_decimal::Decimal) -> Option<u8> {
+        self.pace_zones
+            .as_ref()
+            .map(|zones| crate::zones::ZoneCalculator::get_pace_zone(pace, zones))
     }
 }
