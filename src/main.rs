@@ -2698,7 +2698,7 @@ fn create_sample_endurance_data() -> Vec<DataPoint> {
             timestamp,
             power: Some(power),
             heart_rate: Some(140 + (variation.abs() / 4) as u16),
-            cadence: Some(85 + (variation / 10) as u16),
+            cadence: Some((85 + variation / 10).max(60) as u16),
             speed: Some(rust_decimal::Decimal::from_f64(8.89).unwrap() + rust_decimal::Decimal::from(variation) / dec!(3.6)), // 32 km/h = 8.89 m/s
             distance: Some(rust_decimal::Decimal::from_f64(530.0).unwrap()), // 0.53 km = 530 m
             left_power: Some(power / 2 - 2),
