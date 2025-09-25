@@ -62,6 +62,12 @@ pub struct DataPoint {
 
     /// Distance covered at this point in meters
     pub distance: Option<Decimal>,
+
+    /// Left leg power output in watts (power meter balance)
+    pub left_power: Option<u16>,
+
+    /// Right leg power output in watts (power meter balance)
+    pub right_power: Option<u16>,
 }
 
 /// Summary metrics calculated from workout data
@@ -334,6 +340,8 @@ mod tests {
             cadence: Some(90),
             speed: Some(dec!(5.0)),
             distance: Some(dec!(1000.0)),
+            left_power: Some(125),
+            right_power: Some(125),
         };
 
         assert_eq!(data_point.timestamp, 60);
@@ -353,6 +361,8 @@ mod tests {
             cadence: Some(85),
             speed: Some(dec!(4.5)),
             distance: Some(dec!(500.0)),
+            left_power: None,
+            right_power: None,
         };
 
         let json = serde_json::to_string(&data_point).unwrap();
@@ -429,6 +439,8 @@ mod tests {
                 cadence: Some(80),
                 speed: Some(dec!(3.35)),
                 distance: Some(dec!(0.0)),
+                left_power: None,
+                right_power: None,
             },
             DataPoint {
                 timestamp: 60,
@@ -439,6 +451,8 @@ mod tests {
                 cadence: Some(85),
                 speed: Some(dec!(3.85)),
                 distance: Some(dec!(230.0)),
+                left_power: None,
+                right_power: None,
             },
         ];
 
@@ -617,6 +631,8 @@ mod tests {
                 cadence: Some(85),
                 speed: Some(dec!(8.5)),
                 distance: Some(dec!(0.0)),
+                left_power: Some(75),
+                right_power: Some(75),
             }]),
             summary: WorkoutSummary {
                 avg_heart_rate: Some(155),

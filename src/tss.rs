@@ -435,6 +435,8 @@ mod tests {
                 cadence: Some(90),
                 speed: Some(dec!(8.5)),
                 distance: Some(dec!(0.0)),
+                left_power: Some(100),
+                right_power: Some(100),
             },
             DataPoint {
                 timestamp: 30,
@@ -445,6 +447,8 @@ mod tests {
                 cadence: Some(95),
                 speed: Some(dec!(9.2)),
                 distance: Some(dec!(250.0)),
+                left_power: Some(125),
+                right_power: Some(125),
             },
             DataPoint {
                 timestamp: 60,
@@ -455,6 +459,8 @@ mod tests {
                 cadence: Some(100),
                 speed: Some(dec!(10.0)),
                 distance: Some(dec!(550.0)),
+                left_power: Some(150),
+                right_power: Some(150),
             },
         ];
 
@@ -484,6 +490,8 @@ mod tests {
                 cadence: Some(85),
                 speed: Some(dec!(3.8)),
                 distance: Some(dec!(0.0)),
+                left_power: None,
+                right_power: None,
             },
             DataPoint {
                 timestamp: 300,
@@ -494,6 +502,8 @@ mod tests {
                 cadence: Some(88),
                 speed: Some(dec!(4.1)),
                 distance: Some(dec!(1200.0)),
+                left_power: None,
+                right_power: None,
             },
             DataPoint {
                 timestamp: 600,
@@ -504,6 +514,8 @@ mod tests {
                 cadence: Some(90),
                 speed: Some(dec!(4.5)),
                 distance: Some(dec!(2500.0)),
+                left_power: None,
+                right_power: None,
             },
         ];
 
@@ -605,6 +617,8 @@ mod tests {
                 cadence: None,
                 speed: None,
                 distance: None,
+                left_power: Some(100),
+                right_power: Some(100),
             },
             DataPoint {
                 timestamp: 30,
@@ -615,6 +629,8 @@ mod tests {
                 cadence: None,
                 speed: None,
                 distance: None,
+                left_power: Some(125),
+                right_power: Some(125),
             },
             DataPoint {
                 timestamp: 60,
@@ -625,6 +641,8 @@ mod tests {
                 cadence: None,
                 speed: None,
                 distance: None,
+                left_power: Some(150),
+                right_power: Some(150),
             },
         ];
 
@@ -691,6 +709,8 @@ mod tests {
                 cadence: Some(60),
                 speed: Some(dec!(0.8)),
                 distance: Some(dec!(0.0)),
+                left_power: None,
+                right_power: None,
             },
             DataPoint {
                 timestamp: 120,
@@ -701,6 +721,8 @@ mod tests {
                 cadence: Some(65),
                 speed: Some(dec!(0.9)),
                 distance: Some(dec!(100.0)),
+                left_power: None,
+                right_power: None,
             },
         ];
 

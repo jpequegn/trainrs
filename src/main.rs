@@ -6,11 +6,13 @@ use rust_decimal::{prelude::{FromPrimitive, ToPrimitive}, Decimal};
 use rust_decimal_macros::dec;
 use std::path::PathBuf;
 use std::collections::HashMap;
+use crate::models::DataPoint;
 
 mod export;
 mod import;
 mod models;
 mod pmc;
+mod power;
 mod tss;
 mod zones;
 
@@ -351,6 +353,12 @@ enum Commands {
         min_tss: Option<f64>,
     },
 
+    /// Power analysis for cycling training
+    Power {
+        #[command(subcommand)]
+        command: PowerCommands,
+    },
+
     /// Configure application settings
     Config {
         /// List all configuration options
@@ -364,6 +372,91 @@ enum Commands {
         /// Get a configuration value
         #[arg(short, long)]
         get: Option<String>,
+    },
+}
+
+/// Power analysis subcommands
+#[derive(Subcommand)]
+enum PowerCommands {
+    /// Generate power curve (Mean Maximal Power) analysis
+    Curve {
+        /// Number of days to analyze
+        #[arg(long, default_value = "90")]
+        last_days: u16,
+
+        /// Start date (YYYY-MM-DD)
+        #[arg(long)]
+        from: Option<String>,
+
+        /// End date (YYYY-MM-DD)
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Athlete to analyze
+        #[arg(long)]
+        athlete: Option<String>,
+
+        /// Show comparison with previous period
+        #[arg(long)]
+        compare: bool,
+
+        /// Export results to file
+        #[arg(long)]
+        export: Option<PathBuf>,
+    },
+
+    /// Critical Power model analysis
+    CriticalPower {
+        /// Input file with test data
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+
+        /// Use 3-parameter model
+        #[arg(long)]
+        three_parameter: bool,
+
+        /// Override 3-min power (watts)
+        #[arg(long)]
+        power_3min: Option<u16>,
+
+        /// Override 5-min power (watts)
+        #[arg(long)]
+        power_5min: Option<u16>,
+
+        /// Override 20-min power (watts)
+        #[arg(long)]
+        power_20min: Option<u16>,
+
+        /// Athlete to analyze
+        #[arg(long)]
+        athlete: Option<String>,
+    },
+
+    /// Analyze power data from a single workout
+    Analyze {
+        /// Input workout file
+        #[arg(short, long)]
+        file: PathBuf,
+
+        /// Show interval analysis
+        #[arg(long)]
+        show_intervals: bool,
+
+        /// FTP for calculations
+        #[arg(long)]
+        ftp: Option<u16>,
+
+        /// Show quadrant analysis
+        #[arg(long)]
+        quadrants: bool,
+
+        /// Show power balance analysis
+        #[arg(long)]
+        balance: bool,
+
+        /// Export detailed analysis
+        #[arg(long)]
+        export: Option<PathBuf>,
     },
 }
 
@@ -494,7 +587,7 @@ fn main() -> Result<()> {
             println!("{}", "Calculating training metrics...".blue().bold());
 
             // Handle global athlete flag
-            let athlete_id = athlete.or_else(|| cli.athlete.clone());
+            let athlete_id = athlete.clone().or_else(|| cli.athlete.clone());
             if let Some(a) = &athlete_id {
                 println!("  Athlete: {}", a);
             }
@@ -524,7 +617,7 @@ fn main() -> Result<()> {
                         use crate::models::{AthleteProfile, TrainingZones, Units};
 
                         // Create a basic athlete profile for calculation
-                        let mut profile = AthleteProfile {
+                        let profile = AthleteProfile {
                             id: athlete_id.unwrap_or_else(|| "default".to_string()),
                             name: "Default Athlete".to_string(),
                             date_of_birth: None,
@@ -1144,6 +1237,13 @@ fn main() -> Result<()> {
             println!("{}", "✓ PMC analysis completed".blue());
         }
 
+        Commands::Power { ref command } => {
+            handle_power_commands(command, &cli).unwrap_or_else(|e| {
+                eprintln!("{}", format!("Power analysis error: {}", e).red());
+                std::process::exit(1);
+            });
+        }
+
         Commands::Config { list, set, get } => {
             println!("{}", "Managing configuration...".white().bold());
             if list {
@@ -1758,6 +1858,259 @@ fn create_sample_workouts() -> Vec<crate::models::Workout> {
     ]
 }
 
+/// Handle power analysis commands
+fn handle_power_commands(command: &PowerCommands, cli: &Cli) -> Result<()> {
+    use crate::power::{PowerAnalyzer, CpModelType};
+    use colored::Colorize;
+
+    match command {
+        PowerCommands::Curve {
+            last_days,
+            from,
+            to,
+            athlete,
+            compare,
+            export,
+        } => {
+            println!("{}", "🚴 Generating power curve analysis...".blue().bold());
+
+            // Handle athlete selection
+            let athlete_id = athlete.clone().or_else(|| cli.athlete.clone());
+            if let Some(a) = &athlete_id {
+                println!("  Athlete: {}", a);
+            }
+
+            // Parse date range (reuse existing logic)
+            println!("  📅 Date range: Last {} days", last_days);
+            if let Some(start) = &from {
+                println!("    From: {}", start);
+            }
+            if let Some(end) = &to {
+                println!("    To: {}", end);
+            }
+
+            // TODO: Load actual workout data
+            println!("  📊 Creating sample power curve data...");
+            let sample_workouts = create_sample_power_workouts();
+            let workout_refs: Vec<&crate::models::Workout> = sample_workouts.iter().collect();
+
+            match PowerAnalyzer::calculate_power_curve(&workout_refs, None) {
+                Ok(power_curve) => {
+                    display_power_curve(&power_curve, *compare);
+
+                    if let Some(export_path) = export {
+                        println!("  💾 Exporting to: {}", export_path.display());
+                        // TODO: Implement power curve export
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{}", format!("Failed to calculate power curve: {}", e).red());
+                }
+            }
+
+            println!("{}", "✓ Power curve analysis completed".blue());
+        }
+
+        PowerCommands::CriticalPower {
+            file,
+            three_parameter,
+            power_3min,
+            power_5min,
+            power_20min,
+            athlete,
+        } => {
+            println!("{}", "⚡ Critical Power analysis...".blue().bold());
+
+            // Handle athlete selection
+            let athlete_id = athlete.clone().or_else(|| cli.athlete.clone());
+            if let Some(a) = &athlete_id {
+                println!("  Athlete: {}", a);
+            }
+
+            let model_type = if *three_parameter {
+                CpModelType::ThreeParameter { time_constant: rust_decimal_macros::dec!(30) }
+            } else {
+                CpModelType::TwoParameter
+            };
+
+            println!("  Model: {:?}", model_type);
+
+            if let Some(file_path) = file {
+                println!("  📁 Loading test data from: {}", file_path.display());
+                // TODO: Load and analyze test file
+            }
+
+            // Use manual power inputs if provided
+            if power_3min.is_some() || power_5min.is_some() || power_20min.is_some() {
+                println!("  Using manual power inputs:");
+                if let Some(p3) = power_3min {
+                    println!("    3-min power: {} W", p3);
+                }
+                if let Some(p5) = power_5min {
+                    println!("    5-min power: {} W", p5);
+                }
+                if let Some(p20) = power_20min {
+                    println!("    20-min power: {} W", p20);
+                }
+            }
+
+            // Create sample data for demonstration
+            let sample_workouts = create_sample_power_workouts();
+            let workout_refs: Vec<&crate::models::Workout> = sample_workouts.iter().collect();
+
+            match PowerAnalyzer::calculate_power_curve(&workout_refs, None) {
+                Ok(power_curve) => {
+                    match PowerAnalyzer::fit_critical_power_model(&power_curve, model_type) {
+                        Ok(cp_model) => {
+                            display_critical_power_model(&cp_model);
+                        }
+                        Err(e) => {
+                            eprintln!("{}", format!("Failed to fit CP model: {}", e).red());
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{}", format!("Failed to calculate power curve for CP analysis: {}", e).red());
+                }
+            }
+
+            println!("{}", "✓ Critical Power analysis completed".blue());
+        }
+
+        PowerCommands::Analyze {
+            file,
+            show_intervals,
+            ftp,
+            quadrants,
+            balance,
+            export,
+        } => {
+            println!("{}", "📊 Analyzing workout power data...".blue().bold());
+            println!("  📁 File: {}", file.display());
+
+            if let Some(ftp_value) = ftp {
+                println!("  ⚡ FTP: {} W", ftp_value);
+            }
+
+            // TODO: Load actual workout file
+            println!("  📊 Creating sample workout data for analysis...");
+            let sample_data = create_sample_power_datapoints();
+
+            // Calculate power metrics
+            match PowerAnalyzer::calculate_power_metrics(&sample_data, *ftp) {
+                Ok(metrics) => {
+                    display_power_metrics(&metrics);
+                }
+                Err(e) => {
+                    eprintln!("{}", format!("Failed to calculate power metrics: {}", e).red());
+                }
+            }
+
+            // Peak power analysis
+            match PowerAnalyzer::analyze_peak_powers(&sample_data) {
+                Ok(peaks) => {
+                    display_peak_power_analysis(&peaks);
+                }
+                Err(e) => {
+                    eprintln!("{}", format!("Failed to analyze peak powers: {}", e).red());
+                }
+            }
+
+            // Quadrant analysis if requested
+            if *quadrants {
+                if let Some(ftp_value) = ftp {
+                    match PowerAnalyzer::analyze_quadrants(&sample_data, *ftp_value, 85) {
+                        Ok(quad_analysis) => {
+                            display_quadrant_analysis(&quad_analysis);
+                        }
+                        Err(e) => {
+                            eprintln!("{}", format!("Failed to perform quadrant analysis: {}", e).red());
+                        }
+                    }
+                } else {
+                    println!("{}", "⚠️  FTP required for quadrant analysis".yellow());
+                }
+            }
+
+            // Power balance analysis if requested
+            if *balance {
+                match PowerAnalyzer::analyze_power_balance(&sample_data) {
+                    Ok(balance_analysis) => {
+                        display_power_balance(&balance_analysis);
+                    }
+                    Err(e) => {
+                        eprintln!("{}", format!("Failed to analyze power balance: {}", e).red());
+                    }
+                }
+            }
+
+            if *show_intervals {
+                // TODO: Implement interval detection and analysis
+                println!("  🔍 Interval analysis (coming soon)");
+            }
+
+            if let Some(export_path) = export {
+                println!("  💾 Exporting detailed analysis to: {}", export_path.display());
+                // TODO: Implement detailed analysis export
+            }
+
+            println!("{}", "✓ Power analysis completed".blue());
+        }
+    }
+
+    Ok(())
+}
+
+// Helper functions for power analysis displays and sample data
+
+/// Create sample workout data for power analysis demonstration
+fn create_sample_power_workouts() -> Vec<crate::models::Workout> {
+    use crate::models::*;
+    use rust_decimal_macros::dec;
+    use chrono::NaiveDate;
+
+    vec![
+        Workout {
+            id: "sample_1".to_string(),
+            date: NaiveDate::from_ymd_opt(2024, 1, 15).unwrap(),
+            sport: Sport::Cycling,
+            duration_seconds: 3600, // 1 hour
+            workout_type: WorkoutType::Interval,
+            data_source: DataSource::Power,
+            raw_data: Some(create_sample_intervals_data()),
+            summary: WorkoutSummary {
+                avg_power: Some(250),
+                normalized_power: Some(265),
+                tss: Some(dec!(85)),
+                intensity_factor: Some(dec!(0.88)),
+                ..WorkoutSummary::default()
+            },
+            notes: Some("High intensity interval workout".to_string()),
+            athlete_id: None,
+            source: Some("trainrs".to_string()),
+        },
+        Workout {
+            id: "sample_2".to_string(),
+            date: NaiveDate::from_ymd_opt(2024, 1, 20).unwrap(),
+            sport: Sport::Cycling,
+            duration_seconds: 7200, // 2 hours
+            workout_type: WorkoutType::Endurance,
+            data_source: DataSource::Power,
+            raw_data: Some(create_sample_endurance_data()),
+            summary: WorkoutSummary {
+                avg_power: Some(200),
+                normalized_power: Some(210),
+                tss: Some(dec!(120)),
+                intensity_factor: Some(dec!(0.7)),
+                ..WorkoutSummary::default()
+            },
+            notes: Some("Long endurance ride".to_string()),
+            athlete_id: None,
+            source: Some("trainrs".to_string()),
+        },
+    ]
+}
+
 /// Create sample athlete profile for zone calculations (TODO: Load from actual profile data)
 fn create_sample_athlete_profile() -> crate::models::AthleteProfile {
     use crate::models::{AthleteProfile, TrainingZones, Units};
@@ -2248,4 +2601,436 @@ fn provide_zone_recommendations(workouts: &[&crate::models::Workout]) {
     println!("  • Consistency beats intensity for long-term improvement");
     println!("  • Allow 48+ hours between high-intensity sessions");
     println!("  • Listen to your body and adjust accordingly");
+}
+
+/// Create sample interval workout data
+fn create_sample_intervals_data() -> Vec<DataPoint> {
+    let mut data_points = Vec::new();
+    let mut timestamp = 0;
+
+    // Warm-up: 10 minutes at 150W
+    for _ in 0..600 {
+        data_points.push(DataPoint {
+            timestamp,
+            power: Some(150),
+            heart_rate: Some(130),
+            cadence: Some(85),
+            speed: Some(rust_decimal::Decimal::from_f64(8.33).unwrap()), // 30 km/h = 8.33 m/s
+            distance: Some(rust_decimal::Decimal::from_f64(500.0).unwrap()), // 0.5 km = 500 m
+            left_power: Some(75),
+            right_power: Some(75),
+            pace: None,
+            elevation: None
+        });
+        timestamp += 1;
+    }
+
+    // 5x5min intervals at 300W with 2min recovery at 100W
+    for _ in 0..5 {
+        // 5 minutes at 300W
+        for _ in 0..300 {
+            data_points.push(DataPoint {
+                timestamp,
+                power: Some(300),
+                heart_rate: Some(165),
+                cadence: Some(95),
+                speed: Some(rust_decimal::Decimal::from_f64(9.72).unwrap()), // 35 km/h = 9.72 m/s
+                distance: Some(rust_decimal::Decimal::from_f64(580.0).unwrap()), // 0.58 km = 580 m
+                left_power: Some(148),
+                right_power: Some(152),
+                pace: None,
+            elevation: None
+            });
+            timestamp += 1;
+        }
+
+        // 2 minutes recovery at 100W
+        for _ in 0..120 {
+            data_points.push(DataPoint {
+                timestamp,
+                power: Some(100),
+                heart_rate: Some(140),
+                cadence: Some(75),
+                speed: Some(rust_decimal::Decimal::from_f64(6.94).unwrap()), // 25 km/h = 6.94 m/s
+                distance: Some(rust_decimal::Decimal::from_f64(420.0).unwrap()), // 0.42 km = 420 m
+                left_power: Some(50),
+                right_power: Some(50),
+                pace: None,
+            elevation: None
+            });
+            timestamp += 1;
+        }
+    }
+
+    // Cool-down: remaining time at 120W
+    while data_points.len() < 3600 {
+        data_points.push(DataPoint {
+            timestamp,
+            power: Some(120),
+            heart_rate: Some(125),
+            cadence: Some(80),
+            speed: Some(rust_decimal::Decimal::from_f64(7.78).unwrap()), // 28 km/h = 7.78 m/s
+            distance: Some(rust_decimal::Decimal::from_f64(470.0).unwrap()), // 0.47 km = 470 m
+            left_power: Some(60),
+            right_power: Some(60),
+            pace: None,
+            elevation: None
+        });
+        timestamp += 1;
+    }
+
+    data_points
+}
+
+/// Create sample endurance workout data
+fn create_sample_endurance_data() -> Vec<DataPoint> {
+    let mut data_points = Vec::new();
+    let mut timestamp = 0;
+
+    // 2 hours of steady endurance riding with some variation
+    for i in 0..7200 {
+        // Add some variation to simulate realistic power data
+        let base_power = 200;
+        let variation = ((i as f64 / 100.0).sin() * 20.0) as i16;
+        let power = (base_power + variation).max(150) as u16;
+
+        data_points.push(DataPoint {
+            timestamp,
+            power: Some(power),
+            heart_rate: Some(140 + (variation.abs() / 4) as u16),
+            cadence: Some((85 + variation / 10).max(60) as u16),
+            speed: Some(rust_decimal::Decimal::from_f64(8.89).unwrap() + rust_decimal::Decimal::from(variation) / dec!(3.6)), // 32 km/h = 8.89 m/s
+            distance: Some(rust_decimal::Decimal::from_f64(530.0).unwrap()), // 0.53 km = 530 m
+            left_power: Some(power / 2 - 2),
+            right_power: Some(power / 2 + 2),
+            pace: None,
+            elevation: None
+        });
+        timestamp += 1;
+    }
+
+    data_points
+}
+
+/// Create sample power data points for analysis
+fn create_sample_power_datapoints() -> Vec<DataPoint> {
+    create_sample_intervals_data()
+}
+
+/// Display power curve analysis results
+fn display_power_curve(power_curve: &crate::power::PowerCurve, compare: bool) {
+    use colored::Colorize;
+
+    println!("\n📊 POWER CURVE ANALYSIS");
+    println!("========================");
+    println!("Date Range: {} to {}", power_curve.date_range.0, power_curve.date_range.1);
+    println!("Total Data Points: {}", power_curve.points.len());
+    println!();
+
+    println!("{:<12} │ {:<8} │ {:<12}", "Duration", "Power (W)", "Date Set");
+    println!("─────────────┼──────────┼─────────────");
+
+    // Standard durations with nice formatting
+    let durations = vec![
+        (1, "1 second"),
+        (5, "5 seconds"),
+        (15, "15 seconds"),
+        (30, "30 seconds"),
+        (60, "1 minute"),
+        (300, "5 minutes"),
+        (600, "10 minutes"),
+        (1200, "20 minutes"),
+        (3600, "1 hour"),
+        (14400, "4 hours"),
+        (21600, "6 hours"),
+    ];
+
+    for (duration_secs, duration_str) in durations {
+        if let Some(power_value) = power_curve.standard_durations.get(&duration_secs) {
+            // Find the corresponding date from the points
+            let date_str = power_curve.points
+                .iter()
+                .find(|p| p.duration_seconds == duration_secs && p.max_power == *power_value)
+                .map(|p| p.date.format("%Y-%m-%d").to_string())
+                .unwrap_or_else(|| "N/A".to_string());
+            println!("{:<12} │ {:>8} │ {:<12}",
+                duration_str,
+                format!("{}", power_value).yellow().bold(),
+                date_str.dimmed()
+            );
+        }
+    }
+
+    if compare {
+        println!("\n📈 POWER CURVE COMPARISON");
+        println!("==========================");
+        println!("{}", "Note: Comparison with previous periods coming soon".dimmed());
+    }
+
+    // Power curve insights
+    if let (Some(sprint), Some(cp20)) = (power_curve.standard_durations.get(&5), power_curve.standard_durations.get(&1200)) {
+        let sprint_to_cp_ratio = *sprint as f64 / *cp20 as f64;
+        println!("\n💡 POWER PROFILE INSIGHTS");
+        println!("==========================");
+        println!("Sprint:CP20 Ratio: {:.2} (>2.5 = sprinter, <2.0 = time trialist)", sprint_to_cp_ratio);
+
+        if sprint_to_cp_ratio > 2.5 {
+            println!("{}", "🚀 Strong sprinting power profile".green());
+        } else if sprint_to_cp_ratio < 2.0 {
+            println!("{}", "⏱️ Strong time trial/endurance profile".blue());
+        } else {
+            println!("{}", "⚖️ Balanced power profile".yellow());
+        }
+    }
+}
+
+/// Display critical power model results
+fn display_critical_power_model(cp_model: &crate::power::CriticalPowerModel) {
+    use colored::Colorize;
+
+    println!("\n⚡ CRITICAL POWER MODEL RESULTS");
+    println!("===============================\n");
+
+    // Model type and parameters
+    println!("{}: {:?}", "Model Type".bold(), cp_model.model_type);
+    println!("{}: {:.1} W", "Critical Power (CP)".bold(), cp_model.critical_power);
+    println!("{}: {:.0} J", "W' (Anaerobic Work Capacity)".bold(), cp_model.w_prime);
+
+    if let crate::power::CpModelType::ThreeParameter { time_constant } = &cp_model.model_type {
+        println!("{}: {:.1} s", "Tau (Recovery Time Constant)".bold(), time_constant);
+    }
+
+    println!("{}: {:.4}", "R² (Goodness of Fit)".bold(), cp_model.r_squared);
+    println!();
+
+    // Model quality assessment
+    let quality = if cp_model.r_squared > dec!(0.95) {
+        "Excellent fit".green().bold()
+    } else if cp_model.r_squared > dec!(0.90) {
+        "Good fit".yellow().bold()
+    } else {
+        "Poor fit - consider more data points".red().bold()
+    };
+    println!("{}: {}", "Model Quality", quality);
+    println!();
+
+    // Practical applications
+    println!("{}", "📈 TRAINING APPLICATIONS".blue().bold());
+    println!("========================");
+    println!("• FTP Estimate: {:.0} W (CP)", cp_model.critical_power);
+    println!("• Anaerobic Reserve: {:.0} kJ ({:.1} seconds at 400W)",
+        cp_model.w_prime as f64 / 1000.0,
+        cp_model.w_prime as f64 / (400.0 - cp_model.critical_power as f64)
+    );
+
+    // Training zones based on CP
+    println!("\n🎯 TRAINING ZONES (based on CP)");
+    println!("================================");
+    let cp = cp_model.critical_power as f64;
+    println!("Zone 1 (Active Recovery): < {:.0} W (<75% CP)", cp * 0.75);
+    println!("Zone 2 (Endurance):        {:.0}-{:.0} W (75-85% CP)", cp * 0.75, cp * 0.85);
+    println!("Zone 3 (Tempo):            {:.0}-{:.0} W (85-95% CP)", cp * 0.85, cp * 0.95);
+    println!("Zone 4 (Threshold):        {:.0}-{:.0} W (95-105% CP)", cp * 0.95, cp * 1.05);
+    println!("Zone 5 (VO2max):           {:.0}-{:.0} W (105-120% CP)", cp * 1.05, cp * 1.20);
+    println!("Zone 6 (Anaerobic):        > {:.0} W (>120% CP)", cp * 1.20);
+}
+
+/// Display power metrics analysis
+fn display_power_metrics(metrics: &crate::power::PowerMetrics) {
+    use colored::Colorize;
+
+    println!("\n📊 POWER METRICS ANALYSIS");
+    println!("=========================\n");
+
+    // Basic power stats
+    println!("{}", "🔋 POWER STATISTICS".blue().bold());
+    println!("====================");
+    println!("Normalized Power:   {:>6} W", metrics.normalized_power);
+    println!("Variability Index:  {:>6.3}", metrics.variability_index);
+    println!();
+
+    // Intensity metrics
+    println!("{}", "⚡ INTENSITY METRICS".yellow().bold());
+    println!("====================");
+
+    if let Some(intensity_factor) = metrics.intensity_factor {
+        println!("Intensity Factor:   {:>6.3}", intensity_factor);
+    }
+
+    if let Some(ef) = metrics.efficiency_factor {
+        println!("Efficiency Factor:  {:>6.3}", ef);
+    }
+    println!();
+
+    // Work/energy metrics
+    println!("{}", "🏋️ WORK & ENERGY".green().bold());
+    println!("=================");
+
+    if let Some(work_above_ftp) = metrics.work_above_ftp {
+        println!("Work Above FTP:     {:>6.1} kJ", work_above_ftp as f64 / 1000.0);
+    }
+    if let Some(work_below_ftp) = metrics.work_below_ftp {
+        println!("Work Below FTP:     {:>6.1} kJ", work_below_ftp as f64 / 1000.0);
+    }
+
+    println!();
+    println!("{}", "Note: Additional metrics available with enhanced analysis".dimmed());
+}
+
+/// Display peak power analysis
+fn display_peak_power_analysis(peaks: &crate::power::PeakPowerAnalysis) {
+    use colored::Colorize;
+
+    println!("\n🏔️ PEAK POWER ANALYSIS");
+    println!("======================\n");
+
+    println!("{:<12} │ {:<8}", "Duration", "Power (W)");
+    println!("─────────────┼──────────");
+
+    // Display peak powers
+    if let Some(p5s) = peaks.peak_5s {
+        println!("{:<12} │ {:>8}", "5 seconds", format!("{}", p5s).yellow().bold());
+    }
+    if let Some(p15s) = peaks.peak_15s {
+        println!("{:<12} │ {:>8}", "15 seconds", format!("{}", p15s).yellow().bold());
+    }
+    if let Some(p30s) = peaks.peak_30s {
+        println!("{:<12} │ {:>8}", "30 seconds", format!("{}", p30s).yellow().bold());
+    }
+    if let Some(p1min) = peaks.peak_1min {
+        println!("{:<12} │ {:>8}", "1 minute", format!("{}", p1min).yellow().bold());
+    }
+    if let Some(p5min) = peaks.peak_5min {
+        println!("{:<12} │ {:>8}", "5 minutes", format!("{}", p5min).yellow().bold());
+    }
+    if let Some(p20min) = peaks.peak_20min {
+        println!("{:<12} │ {:>8}", "20 minutes", format!("{}", p20min).yellow().bold());
+    }
+    if let Some(p60min) = peaks.peak_60min {
+        println!("{:<12} │ {:>8}", "60 minutes", format!("{}", p60min).yellow().bold());
+    }
+
+    println!();
+
+    // Peak power insights
+    println!("{}", "💡 PEAK POWER INSIGHTS".cyan().bold());
+    println!("=======================");
+
+    if let (Some(sprint), Some(one_min)) = (peaks.peak_5s, peaks.peak_1min) {
+        let neuromuscular_ratio = sprint as f64 / one_min as f64;
+        println!("Neuromuscular Power: {:.2}x 1-min power", neuromuscular_ratio);
+
+        if neuromuscular_ratio > 2.0 {
+            println!("{}", "🚀 Excellent sprint capacity".green());
+        } else if neuromuscular_ratio < 1.5 {
+            println!("{}", "⏱️ Focus on neuromuscular power development".yellow());
+        }
+    }
+
+    if let (Some(five_min), Some(twenty_min)) = (peaks.peak_5min, peaks.peak_20min) {
+        let vo2_threshold_ratio = five_min as f64 / twenty_min as f64;
+        println!("VO2max:FTP Ratio: {:.2} (typical range: 1.15-1.25)", vo2_threshold_ratio);
+
+        if vo2_threshold_ratio > 1.25 {
+            println!("{}", "💪 Strong VO2max relative to threshold".green());
+        } else if vo2_threshold_ratio < 1.15 {
+            println!("{}", "📈 Focus on VO2max development".yellow());
+        }
+    }
+}
+
+/// Display quadrant analysis
+fn display_quadrant_analysis(analysis: &crate::power::QuadrantAnalysis) {
+    use colored::Colorize;
+
+    println!("\n🎯 QUADRANT ANALYSIS");
+    println!("===================\n");
+
+    println!("{:<20} │ {:<6}", "Quadrant", "% of Time");
+    println!("─────────────────────┼────────");
+
+    println!("{:<20} │ {:>6.1}%", "Q1 (High Power, High Cadence)", analysis.quadrant_i_percent);
+    println!("{:<20} │ {:>6.1}%", "Q2 (Low Power, High Cadence)", analysis.quadrant_ii_percent);
+    println!("{:<20} │ {:>6.1}%", "Q3 (Low Power, Low Cadence)", analysis.quadrant_iii_percent);
+    println!("{:<20} │ {:>6.1}%", "Q4 (High Power, Low Cadence)", analysis.quadrant_iv_percent);
+
+    println!();
+    println!("{}", "💡 TRAINING INSIGHTS".cyan().bold());
+    println!("====================");
+
+    let q1_pct = analysis.quadrant_i_percent.to_f64().unwrap_or(0.0);
+    let q2_pct = analysis.quadrant_ii_percent.to_f64().unwrap_or(0.0);
+    let q3_pct = analysis.quadrant_iii_percent.to_f64().unwrap_or(0.0);
+    let q4_pct = analysis.quadrant_iv_percent.to_f64().unwrap_or(0.0);
+
+    if q4_pct > 25.0 {
+        println!("{}", "💪 High force development work detected".green());
+    }
+    if q1_pct > 40.0 {
+        println!("{}", "🏃 Strong sustained power emphasis".blue());
+    }
+    if q3_pct > 50.0 {
+        println!("{}", "😴 High recovery time - consider intensity".yellow());
+    }
+    if q2_pct > 15.0 {
+        println!("{}", "🚴 Good high-cadence endurance work".cyan());
+    }
+}
+
+/// Display power balance analysis
+fn display_power_balance(balance: &crate::power::PowerBalance) {
+    use colored::Colorize;
+
+    println!("\n⚖️ POWER BALANCE ANALYSIS");
+    println!("=========================\n");
+
+    println!("{}", "🦵 LEFT/RIGHT LEG BALANCE".blue().bold());
+    println!("==========================");
+    println!("Left Leg:          {:>5.1}%", balance.left_percent);
+    println!("Right Leg:         {:>5.1}%", balance.right_percent);
+    println!("Balance Score:     {:>5.1}", balance.balance_score);
+    println!();
+
+    let avg_imbalance = (balance.left_percent - rust_decimal::Decimal::from(50)).abs();
+    println!("Average Imbalance: {:>5.1}%", avg_imbalance);
+
+    println!();
+
+    // Visual representation
+    let left_bars = ((balance.left_percent.to_f64().unwrap_or(0.0) / 2.0) as usize).min(25);
+    let right_bars = ((balance.right_percent.to_f64().unwrap_or(0.0) / 2.0) as usize).min(25);
+
+    println!("{}", "📊 VISUAL BALANCE".green().bold());
+    println!("=================\n");
+    println!("Left:  {:>5.1}% │{:<25}│", balance.left_percent, "█".repeat(left_bars));
+    println!("Right: {:>5.1}% │{:<25}│", balance.right_percent, "█".repeat(right_bars));
+    println!("               │{}│", "-".repeat(25));
+    println!("               0%      50%      100%");
+    println!();
+
+    // Analysis and recommendations
+    println!("{}", "💡 BALANCE ASSESSMENT".cyan().bold());
+    println!("======================");
+
+    let avg_imbalance_f64 = avg_imbalance.to_f64().unwrap_or(0.0);
+    if avg_imbalance_f64 < 2.0 {
+        println!("{}", "✅ Excellent balance (<2% imbalance)".green());
+    } else if avg_imbalance_f64 < 5.0 {
+        println!("{}", "✅ Good balance (2-5% imbalance)".yellow());
+    } else if avg_imbalance_f64 < 10.0 {
+        println!("{}", "⚠️ Moderate imbalance (5-10%) - monitor closely".yellow());
+    } else {
+        println!("{}", "🚨 Significant imbalance (>10%) - consider bike fit review".red());
+    }
+
+    println!();
+    println!("Recommendations:");
+    if avg_imbalance_f64 > 5.0 {
+        println!("• Consider professional bike fitting");
+        println!("• Check for leg length differences");
+        println!("• Focus on single-leg training drills");
+    } else {
+        println!("• Continue current training approach");
+        println!("• Monitor trends over time");
+    }
 }

@@ -305,6 +305,8 @@ impl ImportFormat for CsvImporter {
                 cadence: None,
                 speed: None,
                 distance: None,
+                left_power: None,
+                right_power: None,
             };
 
             // Parse each field based on column mapping
