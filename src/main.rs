@@ -1858,6 +1858,8 @@ fn create_sample_workouts() -> Vec<crate::models::Workout> {
     ]
 }
 
+}
+
 /// Handle power analysis commands
 fn handle_power_commands(command: &PowerCommands, cli: &Cli) -> Result<()> {
     use crate::power::{PowerAnalyzer, CpModelType};
