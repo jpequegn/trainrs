@@ -11,6 +11,7 @@ use crate::models::DataPoint;
 mod export;
 mod import;
 mod models;
+mod multisport;
 mod pmc;
 mod power;
 mod running;
@@ -364,6 +365,12 @@ enum Commands {
     Running {
         #[command(subcommand)]
         command: RunningCommands,
+    },
+
+    /// Multi-sport training analysis and load tracking
+    MultiSport {
+        #[command(subcommand)]
+        command: multisport::MultiSportCommands,
     },
 
     /// Configure application settings
@@ -1393,6 +1400,13 @@ fn main() -> Result<()> {
             });
         }
 
+        Commands::MultiSport { ref command } => {
+            handle_multisport_commands(command, &cli).unwrap_or_else(|e| {
+                eprintln!("{}", format!("Multi-sport analysis error: {}", e).red());
+                std::process::exit(1);
+            });
+        }
+
         Commands::Config { list, set, get } => {
             println!("{}", "Managing configuration...".white().bold());
             if list {
@@ -2306,6 +2320,188 @@ fn handle_running_commands(command: &RunningCommands, cli: &Cli) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Handle multi-sport training analysis commands
+fn handle_multisport_commands(command: &multisport::MultiSportCommands, cli: &Cli) -> Result<()> {
+    use crate::multisport;
+    use colored::Colorize;
+    use crate::import::ImportManager;
+
+    println!("{}", "Multi-sport Training Analysis".cyan().bold());
+
+    match command {
+        multisport::MultiSportCommands::Load { from, to, breakdown } => {
+            println!("🏋️  Calculating combined training load across all sports...");
+            if *breakdown {
+                println!("  📊 Including sport-specific breakdown");
+            }
+            if let Some(from) = from {
+                println!("  📅 From: {}", from);
+            }
+            if let Some(to) = to {
+                println!("  📅 To: {}", to);
+            }
+
+            // TODO: Load workouts from database or files
+            // For now, create an empty workout list for testing
+            let workouts: Vec<crate::models::Workout> = Vec::new();
+            println!("  ⚠️  No workout data available for analysis (implementation pending)");
+
+            // Create basic athlete profile (in real implementation, this would be loaded from config)
+            let athlete = crate::models::AthleteProfile {
+                id: "default".to_string(),
+                name: "Default Athlete".to_string(),
+                date_of_birth: None,
+                weight: Some(rust_decimal_macros::dec!(70.0)),
+                height: Some(175),
+                ftp: Some(250),
+                lthr: Some(170),
+                threshold_pace: Some(rust_decimal_macros::dec!(4.5)),
+                max_hr: Some(190),
+                resting_hr: Some(60),
+                training_zones: crate::models::TrainingZones {
+                    heart_rate_zones: None,
+                    power_zones: None,
+                    pace_zones: None,
+                },
+                preferred_units: crate::models::Units::Metric,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            };
+
+            let combined_load = multisport::calculate_combined_load(&workouts, &athlete, *from, *to)?;
+
+            println!("\n📈 Combined Training Load Summary:");
+            for load in combined_load.iter().take(10) {  // Show last 10 days
+                println!("  {} - Total TSS: {:.1}", load.date, load.total_tss);
+                if *breakdown && !load.sport_breakdown.is_empty() {
+                    for (sport, tss) in &load.sport_breakdown {
+                        println!("    {:?}: {:.1} TSS", sport, tss);
+                    }
+                }
+            }
+        },
+
+        multisport::MultiSportCommands::Distribution { period, weekly } => {
+            println!("📊 Analyzing training distribution by sport...");
+            println!("  📅 Period: {} days", period);
+
+            // TODO: Load workouts from database or files
+            // For now, create an empty workout list for testing
+            let workouts: Vec<crate::models::Workout> = Vec::new();
+            println!("  ⚠️  No workout data available for analysis (implementation pending)");
+
+            let athlete = crate::models::AthleteProfile {
+                id: "default".to_string(),
+                name: "Default Athlete".to_string(),
+                date_of_birth: None,
+                weight: Some(rust_decimal_macros::dec!(70.0)),
+                height: Some(175),
+                ftp: Some(250),
+                lthr: Some(170),
+                threshold_pace: Some(rust_decimal_macros::dec!(4.5)),
+                max_hr: Some(190),
+                resting_hr: Some(60),
+                training_zones: crate::models::TrainingZones {
+                    heart_rate_zones: None,
+                    power_zones: None,
+                    pace_zones: None,
+                },
+                preferred_units: crate::models::Units::Metric,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            };
+
+            let distribution = multisport::calculate_sport_distribution(&workouts, &athlete, *period, *weekly)?;
+
+            println!("\n🎯 Sport Distribution Summary:");
+            println!("  Total training time: {:.1} hours", distribution.total_time as f64 / 3600.0);
+            println!("  Total TSS: {:.1}", distribution.total_tss);
+
+            println!("\n⏱️  Time Distribution:");
+            for (sport, percentage) in &distribution.sport_time_distribution {
+                println!("  {:?}: {:.1}%", sport, percentage);
+            }
+
+            println!("\n💪 TSS Distribution:");
+            for (sport, percentage) in &distribution.sport_tss_distribution {
+                println!("  {:?}: {:.1}%", sport, percentage);
+            }
+        },
+
+        multisport::MultiSportCommands::Equivalency { from_sport, to_sport, tss } => {
+            println!("🔄 Calculating sport equivalency conversion...");
+            println!("  From: {} TSS", tss);
+            println!("  {} → {}", from_sport, to_sport);
+
+            let from_sport_enum = parse_sport_string(from_sport)?;
+            let to_sport_enum = parse_sport_string(to_sport)?;
+            let tss_decimal = rust_decimal::Decimal::from_f64(*tss).unwrap_or_default();
+
+            let equivalency = multisport::calculate_sport_equivalency(
+                from_sport_enum,
+                to_sport_enum,
+                tss_decimal
+            );
+
+            println!("\n📊 Equivalency Result:");
+            println!("  Conversion Factor: {:.2}", equivalency.conversion_factor);
+            println!("  Original TSS: {:.1}", equivalency.original_tss);
+            println!("  Equivalent TSS: {:.1}", equivalency.equivalent_tss);
+        },
+
+        multisport::MultiSportCommands::Triathlon { css, brick, transitions } => {
+            println!("🏊‍♀️🚴‍♀️🏃‍♀️ Triathlon-specific analysis...");
+
+            // TODO: Load workouts from database or files
+            // For now, create an empty workout list for testing
+            let workouts: Vec<crate::models::Workout> = Vec::new();
+            println!("  ⚠️  No workout data available for analysis (implementation pending)");
+
+            if *css {
+                println!("\n🏊‍♀️ Critical Swim Speed Analysis:");
+                let swim_workouts: Vec<_> = workouts.iter()
+                    .filter(|w| w.sport == crate::models::Sport::Swimming)
+                    .cloned()
+                    .collect();
+
+                if let Some(css_metrics) = multisport::calculate_css(&swim_workouts) {
+                    println!("  CSS Pace: {:.2} min/100m", css_metrics.css_pace);
+                    println!("  Recent performances: {} swims", css_metrics.recent_performances.len());
+                } else {
+                    println!("  ❌ Not enough swimming data for CSS calculation");
+                }
+            }
+
+            if *brick {
+                println!("\n🚴‍♀️🏃‍♀️ Brick Workout Analysis:");
+                println!("  📊 Analysis coming soon - detecting bike-to-run transitions");
+            }
+
+            if *transitions {
+                println!("\n⏱️  Transition Training Summary:");
+                println!("  📊 Analysis coming soon - T1 and T2 transition tracking");
+            }
+        },
+    }
+
+    Ok(())
+}
+
+/// Parse sport string into Sport enum
+fn parse_sport_string(sport_str: &str) -> Result<crate::models::Sport> {
+    use crate::models::Sport;
+
+    match sport_str.to_lowercase().as_str() {
+        "running" | "run" => Ok(Sport::Running),
+        "cycling" | "bike" | "cycle" => Ok(Sport::Cycling),
+        "swimming" | "swim" => Ok(Sport::Swimming),
+        "triathlon" | "tri" => Ok(Sport::Triathlon),
+        "rowing" | "row" => Ok(Sport::Rowing),
+        "crosstraining" | "cross" | "xt" => Ok(Sport::CrossTraining),
+        _ => Err(anyhow::anyhow!("Unknown sport: {}. Supported sports: running, cycling, swimming, triathlon, rowing, crosstraining", sport_str))
+    }
 }
 
 /// Handle power analysis commands
