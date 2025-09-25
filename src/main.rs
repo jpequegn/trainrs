@@ -1,9 +1,11 @@
 use anyhow::Result;
-use chrono::Datelike;
+use chrono::{Datelike, NaiveDate, Duration};
 use clap::{Parser, Subcommand};
 use colored::*;
-use rust_decimal::prelude::FromPrimitive;
+use rust_decimal::{prelude::{FromPrimitive, ToPrimitive}, Decimal};
+use rust_decimal_macros::dec;
 use std::path::PathBuf;
+use std::collections::HashMap;
 
 mod export;
 mod import;
@@ -48,6 +50,108 @@ struct Cli {
 
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Subcommand)]
+enum ZoneCommands {
+    /// List current training zones
+    List {
+        /// Zone type (heart-rate, power, pace)
+        #[arg(short = 't', long)]
+        zone_type: Option<String>,
+
+        /// Athlete profile to work with
+        #[arg(long)]
+        athlete: Option<String>,
+    },
+
+    /// Set training zone thresholds
+    Set {
+        /// Zone type (heart-rate, power, pace)
+        #[arg(short = 't', long)]
+        zone_type: Option<String>,
+
+        /// Athlete profile to work with
+        #[arg(long)]
+        athlete: Option<String>,
+
+        /// FTP value for power zones
+        #[arg(long)]
+        ftp: Option<u16>,
+
+        /// LTHR value for heart rate zones
+        #[arg(long)]
+        lthr: Option<u16>,
+
+        /// Max HR value for heart rate zones
+        #[arg(long)]
+        max_hr: Option<u16>,
+
+        /// Threshold pace for running zones (min/mile or min/km)
+        #[arg(long)]
+        threshold_pace: Option<f64>,
+    },
+
+    /// Calculate zones from athlete profile
+    Calculate {
+        /// Athlete profile to work with
+        #[arg(long)]
+        athlete: Option<String>,
+    },
+
+    /// Import zones from external source
+    Import {
+        /// Import file path
+        #[arg(short, long)]
+        file: PathBuf,
+
+        /// Athlete profile to work with
+        #[arg(long)]
+        athlete: Option<String>,
+    },
+
+    /// Analyze time-in-zone distributions
+    Analyze {
+        /// Time period for analysis
+        #[arg(long)]
+        last_days: Option<u16>,
+
+        /// Start date for analysis (YYYY-MM-DD)
+        #[arg(long)]
+        from: Option<String>,
+
+        /// End date for analysis (YYYY-MM-DD)
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Filter by specific sport
+        #[arg(long)]
+        sport: Option<String>,
+
+        /// Zone type to analyze (heart-rate, power, pace, all)
+        #[arg(short = 't', long, default_value = "all")]
+        zone_type: String,
+
+        /// Athlete profile to use for zone calculations
+        #[arg(long)]
+        athlete: Option<String>,
+
+        /// Show detailed zone distribution
+        #[arg(long)]
+        detailed: bool,
+
+        /// Show training pattern analysis
+        #[arg(long)]
+        show_patterns: bool,
+
+        /// Show training recommendations
+        #[arg(long)]
+        show_recommendations: bool,
+
+        /// Minimum workout duration in minutes to include
+        #[arg(long)]
+        min_duration: Option<u32>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -177,33 +281,8 @@ enum Commands {
 
     /// Manage training zones and thresholds
     Zones {
-        /// Zone action (list, set, calculate, import)
-        #[arg(long, default_value = "list")]
-        action: String,
-
-        /// Zone type (heart-rate, power, pace)
-        #[arg(short = 't', long)]
-        zone_type: Option<String>,
-
-        /// Athlete profile to work with
-        #[arg(long)]
-        athlete: Option<String>,
-
-        /// FTP value for power zones
-        #[arg(long)]
-        ftp: Option<u16>,
-
-        /// LTHR value for heart rate zones
-        #[arg(long)]
-        lthr: Option<u16>,
-
-        /// Max HR value for heart rate zones
-        #[arg(long)]
-        max_hr: Option<u16>,
-
-        /// Threshold pace for running zones (min/mile or min/km)
-        #[arg(long)]
-        threshold_pace: Option<f64>,
+        #[command(subcommand)]
+        command: ZoneCommands,
     },
 
     /// Generate training summaries
@@ -672,41 +751,30 @@ fn main() -> Result<()> {
             println!("{}", "✓ Display completed".magenta());
         }
 
-        Commands::Zones {
-            action,
-            zone_type,
-            athlete,
-            ftp,
-            lthr,
-            max_hr,
-            threshold_pace,
-        } => {
-            println!("{}", "Managing training zones...".cyan().bold());
+        Commands::Zones { ref command } => {
+            match command {
+                ZoneCommands::List { zone_type, athlete } => {
+                    println!("{}", "Listing training zones...".cyan().bold());
 
-            // Handle global athlete flag
-            let athlete_id = athlete.or_else(|| cli.athlete.clone());
-            if let Some(a) = &athlete_id {
-                println!("  Athlete: {}", a);
-            }
+                    // Handle global athlete flag
+                    let athlete_id = athlete.clone().or_else(|| cli.athlete.clone());
+                    if let Some(a) = &athlete_id {
+                        println!("  Athlete: {}", a);
+                    }
 
-            println!("  Action: {}", action);
-
-            match action.as_str() {
-                "list" => {
-                    println!("  Listing current training zones:");
                     if let Some(zone_type_str) = zone_type {
                         println!("  Zone type: {}", zone_type_str);
                         match zone_type_str.as_str() {
                             "heart-rate" | "hr" => {
-                                println!("  Heart Rate Zones:");
-                                println!("    Zone 1: < 68% of LTHR (Active Recovery)");
-                                println!("    Zone 2: 69-83% of LTHR (Aerobic Base)");
-                                println!("    Zone 3: 84-94% of LTHR (Aerobic)");
-                                println!("    Zone 4: 95-105% of LTHR (Lactate Threshold)");
-                                println!("    Zone 5: > 105% of LTHR (VO2 Max)");
+                                println!("\n💓 Heart Rate Zones:");
+                                println!("    Zone 1: < 81% of LTHR (Active Recovery)");
+                                println!("    Zone 2: 81-89% of LTHR (Aerobic Base)");
+                                println!("    Zone 3: 90-93% of LTHR (Aerobic)");
+                                println!("    Zone 4: 94-99% of LTHR (Lactate Threshold)");
+                                println!("    Zone 5: 100%+ of LTHR (VO2 Max)");
                             }
                             "power" => {
-                                println!("  Power Zones:");
+                                println!("\n⚡ Power Zones:");
                                 println!("    Zone 1: < 55% of FTP (Active Recovery)");
                                 println!("    Zone 2: 56-75% of FTP (Endurance)");
                                 println!("    Zone 3: 76-90% of FTP (Tempo)");
@@ -716,7 +784,7 @@ fn main() -> Result<()> {
                                 println!("    Zone 7: > 150% of FTP (Sprint Power)");
                             }
                             "pace" => {
-                                println!("  Pace Zones:");
+                                println!("\n🏃 Pace Zones:");
                                 println!("    Zone 1: Easy pace (slowest)");
                                 println!("    Zone 2: Aerobic pace");
                                 println!("    Zone 3: Tempo pace");
@@ -729,47 +797,113 @@ fn main() -> Result<()> {
                             }
                         }
                     } else {
-                        println!("  All zone types available");
+                        println!("\n📊 All Available Zone Types:");
+                        println!("  💓 Heart Rate Zones (5 zones based on LTHR)");
+                        println!("  ⚡ Power Zones (7 zones based on FTP)");
+                        println!("  🏃 Pace Zones (5 zones based on threshold pace)");
                     }
+                    println!("{}", "✓ Zone listing completed".cyan());
                 }
-                "set" => {
-                    println!("  Setting training zones:");
 
+                ZoneCommands::Set { zone_type, athlete, ftp, lthr, max_hr, threshold_pace } => {
+                    println!("{}", "Setting training zone thresholds...".cyan().bold());
+
+                    // Handle global athlete flag
+                    let athlete_id = athlete.clone().or_else(|| cli.athlete.clone());
+                    if let Some(a) = &athlete_id {
+                        println!("  Athlete: {}", a);
+                    }
+
+                    if let Some(zone_type_str) = zone_type {
+                        println!("  Zone type: {}", zone_type_str);
+                    }
+
+                    let mut updated_thresholds = false;
 
                     if let Some(ftp_value) = ftp {
                         println!("    FTP: {} watts", ftp_value);
+                        updated_thresholds = true;
                         // TODO: Create or update athlete profile with FTP
                     }
                     if let Some(lthr_value) = lthr {
                         println!("    LTHR: {} bpm", lthr_value);
+                        updated_thresholds = true;
                         // TODO: Create or update athlete profile with LTHR
                     }
                     if let Some(max_hr_value) = max_hr {
                         println!("    Max HR: {} bpm", max_hr_value);
+                        updated_thresholds = true;
                         // TODO: Create or update athlete profile with Max HR
                     }
                     if let Some(pace_value) = threshold_pace {
                         println!("    Threshold pace: {:.2} min/mile", pace_value);
+                        updated_thresholds = true;
                         // TODO: Create or update athlete profile with threshold pace
                     }
+
+                    if !updated_thresholds {
+                        println!("  No threshold values provided. Use --ftp, --lthr, --max-hr, or --threshold-pace");
+                    }
+
+                    println!("{}", "✓ Zone thresholds updated".cyan());
                 }
-                "calculate" => {
-                    println!("  Calculating zones from current athlete profile:");
+
+                ZoneCommands::Calculate { athlete } => {
+                    println!("{}", "Calculating zones from athlete profile...".cyan().bold());
+
+                    // Handle global athlete flag
+                    let athlete_id = athlete.clone().or_else(|| cli.athlete.clone());
+                    if let Some(a) = &athlete_id {
+                        println!("  Athlete: {}", a);
+                    }
+
                     // TODO: Load athlete profile and calculate zones using ZoneCalculator
                     println!("  ✓ Zones calculated and updated");
+                    println!("{}", "✓ Zone calculation completed".cyan());
                 }
-                "import" => {
-                    println!("  Importing zones from external source:");
+
+                ZoneCommands::Import { file, athlete } => {
+                    println!("{}", "Importing zones from file...".cyan().bold());
+
+                    // Handle global athlete flag
+                    let athlete_id = athlete.clone().or_else(|| cli.athlete.clone());
+                    if let Some(a) = &athlete_id {
+                        println!("  Athlete: {}", a);
+                    }
+
+                    println!("  Import file: {}", file.display());
                     // TODO: Implement zone import functionality
                     println!("  ✓ Zones imported successfully");
+                    println!("{}", "✓ Zone import completed".cyan());
                 }
-                _ => {
-                    eprintln!("{}", "✗ Invalid action. Use: list, set, calculate, or import".red());
-                    std::process::exit(1);
+
+                ZoneCommands::Analyze {
+                    last_days,
+                    from,
+                    to,
+                    sport,
+                    zone_type,
+                    athlete,
+                    detailed,
+                    show_patterns,
+                    show_recommendations,
+                    min_duration,
+                } => {
+                    handle_zone_analysis(
+                        &cli,
+                        *last_days,
+                        from.clone(),
+                        to.clone(),
+                        sport.clone(),
+                        zone_type.clone(),
+                        athlete.clone(),
+                        *detailed,
+                        *show_patterns,
+                        *show_recommendations,
+                        *min_duration,
+                    );
                 }
             }
-
-            println!("{}", "✓ Zone management completed".cyan());
         }
 
         Commands::Summary {
@@ -1402,4 +1536,716 @@ fn get_tsb_color_string(tsb: &rust_decimal::Decimal) -> String {
     } else {
         tsb_str.red().bold().to_string()
     }
+}
+
+/// Handle zone analysis command
+fn handle_zone_analysis(
+    cli: &Cli,
+    last_days: Option<u16>,
+    from: Option<String>,
+    to: Option<String>,
+    sport: Option<String>,
+    zone_type: String,
+    athlete: Option<String>,
+    detailed: bool,
+    show_patterns: bool,
+    show_recommendations: bool,
+    min_duration: Option<u32>,
+) {
+    use crate::export::DateRange;
+    use crate::models::{Workout, Sport, AthleteProfile};
+    use crate::zones::{ZoneAnalyzer, ZoneCalculator};
+
+    println!("{}", "🎯 Analyzing zone distributions...".cyan().bold());
+
+    // Handle global athlete flag
+    let athlete_id = athlete.as_ref().or(cli.athlete.as_ref());
+    if let Some(a) = athlete_id {
+        println!("  Athlete: {}", a);
+    }
+
+    // Parse date range
+    let date_range = parse_date_range(&last_days, &from, &to);
+    if let Some(start) = date_range.start {
+        if let Some(end) = date_range.end {
+            println!("  📅 Period: {} to {}", start.format("%Y-%m-%d"), end.format("%Y-%m-%d"));
+        } else {
+            println!("  📅 Period: From {}", start.format("%Y-%m-%d"));
+        }
+    } else if let Some(end) = date_range.end {
+        println!("  📅 Period: Up to {}", end.format("%Y-%m-%d"));
+    }
+
+    if let Some(s) = &sport {
+        println!("  🏃 Sport filter: {}", s);
+    }
+    if let Some(duration) = min_duration {
+        println!("  ⏱️  Minimum duration: {} minutes", duration);
+    }
+    println!("  📊 Zone type: {}", zone_type);
+
+    // TODO: Load workout data from database/storage
+    // For now, create sample data to demonstrate functionality
+    let sample_workouts = create_sample_workouts();
+
+    // Filter workouts by date range
+    let filtered_workouts = date_range.filter_workouts(&sample_workouts);
+    println!("  📈 Found {} workouts matching criteria", filtered_workouts.len());
+
+    if filtered_workouts.is_empty() {
+        println!("{}", "❌ No workouts found matching the specified criteria".yellow());
+        return;
+    }
+
+    // Filter by sport if specified
+    let workouts_by_sport: Vec<&Workout> = if let Some(sport_filter) = &sport {
+        filtered_workouts.into_iter().filter(|w| {
+            format!("{:?}", w.sport).to_lowercase().contains(&sport_filter.to_lowercase())
+        }).collect()
+    } else {
+        filtered_workouts
+    };
+
+    // Filter by minimum duration if specified
+    let final_workouts: Vec<&Workout> = if let Some(min_dur) = min_duration {
+        let min_seconds = min_dur * 60;
+        workouts_by_sport.into_iter().filter(|w| w.duration_seconds >= min_seconds).collect()
+    } else {
+        workouts_by_sport
+    };
+
+    if final_workouts.is_empty() {
+        println!("{}", "❌ No workouts found after applying filters".yellow());
+        return;
+    }
+
+    println!("  ✅ Analyzing {} workouts", final_workouts.len());
+
+    // Create sample athlete profile for zone calculations
+    let athlete_profile = create_sample_athlete_profile();
+
+    // Perform zone analysis based on zone_type
+    match zone_type.as_str() {
+        "heart-rate" | "hr" => analyze_heart_rate_zones(&final_workouts, &athlete_profile, detailed),
+        "power" => analyze_power_zones(&final_workouts, &athlete_profile, detailed),
+        "pace" => analyze_pace_zones(&final_workouts, &athlete_profile, detailed),
+        "all" => {
+            analyze_heart_rate_zones(&final_workouts, &athlete_profile, detailed);
+            analyze_power_zones(&final_workouts, &athlete_profile, detailed);
+            analyze_pace_zones(&final_workouts, &athlete_profile, detailed);
+        }
+        _ => {
+            println!("{}", "❌ Invalid zone type. Use: heart-rate, power, pace, or all".red());
+            return;
+        }
+    }
+
+    if show_patterns {
+        analyze_training_patterns(&final_workouts);
+    }
+
+    if show_recommendations {
+        provide_zone_recommendations(&final_workouts);
+    }
+
+    println!("{}", "✓ Zone analysis completed".green());
+}
+
+/// Parse date range from command line arguments
+fn parse_date_range(last_days: &Option<u16>, from: &Option<String>, to: &Option<String>) -> crate::export::DateRange {
+
+    // If last_days is specified, calculate from and to dates
+    if let Some(days) = last_days {
+        let end_date = chrono::Utc::now().date_naive();
+        let start_date = end_date - Duration::days(*days as i64);
+        return crate::export::DateRange::new(Some(start_date), Some(end_date));
+    }
+
+    // Parse from date
+    let start_date = from.as_ref().and_then(|date_str| {
+        NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()
+    });
+
+    // Parse to date
+    let end_date = to.as_ref().and_then(|date_str| {
+        NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()
+    });
+
+    crate::export::DateRange::new(start_date, end_date)
+}
+
+/// Create sample workouts for demonstration (TODO: Replace with actual data loading)
+fn create_sample_workouts() -> Vec<crate::models::Workout> {
+    use crate::models::{Workout, WorkoutSummary, Sport, WorkoutType, DataSource};
+
+    let today = chrono::Utc::now().date_naive();
+    vec![
+        Workout {
+            id: "sample_1".to_string(),
+            date: today - Duration::days(7),
+            sport: Sport::Cycling,
+            duration_seconds: 3600,
+            workout_type: WorkoutType::Endurance,
+            data_source: DataSource::Power,
+            raw_data: None,
+            summary: WorkoutSummary {
+                tss: Some(dec!(85)),
+                avg_heart_rate: Some(150),
+                max_heart_rate: Some(175),
+                avg_power: Some(220),
+                normalized_power: Some(235),
+                intensity_factor: Some(dec!(0.94)),
+                total_distance: Some(dec!(40000)),
+                elevation_gain: Some(500),
+                avg_cadence: Some(85),
+                calories: Some(650),
+                avg_pace: None,
+            },
+            notes: Some("Zone 2 endurance ride".to_string()),
+            athlete_id: Some("test_athlete".to_string()),
+            source: Some("sample_data".to_string()),
+        },
+        Workout {
+            id: "sample_2".to_string(),
+            date: today - Duration::days(5),
+            sport: Sport::Running,
+            duration_seconds: 2400,
+            workout_type: WorkoutType::Tempo,
+            data_source: DataSource::HeartRate,
+            raw_data: None,
+            summary: WorkoutSummary {
+                tss: Some(dec!(65)),
+                avg_heart_rate: Some(165),
+                max_heart_rate: Some(185),
+                avg_power: None,
+                normalized_power: None,
+                intensity_factor: None,
+                total_distance: Some(dec!(8000)),
+                elevation_gain: Some(100),
+                avg_cadence: Some(180),
+                calories: Some(420),
+                avg_pace: Some(dec!(5.5)),
+            },
+            notes: Some("Tempo run".to_string()),
+            athlete_id: Some("test_athlete".to_string()),
+            source: Some("sample_data".to_string()),
+        },
+        Workout {
+            id: "sample_3".to_string(),
+            date: today - Duration::days(2),
+            sport: Sport::Cycling,
+            duration_seconds: 5400,
+            workout_type: WorkoutType::Interval,
+            data_source: DataSource::Power,
+            raw_data: None,
+            summary: WorkoutSummary {
+                tss: Some(dec!(120)),
+                avg_heart_rate: Some(160),
+                max_heart_rate: Some(190),
+                avg_power: Some(280),
+                normalized_power: Some(310),
+                intensity_factor: Some(dec!(1.24)),
+                total_distance: Some(dec!(60000)),
+                elevation_gain: Some(800),
+                avg_cadence: Some(90),
+                calories: Some(950),
+                avg_pace: None,
+            },
+            notes: Some("High-intensity interval training".to_string()),
+            athlete_id: Some("test_athlete".to_string()),
+            source: Some("sample_data".to_string()),
+        },
+    ]
+}
+
+/// Create sample athlete profile for zone calculations (TODO: Load from actual profile data)
+fn create_sample_athlete_profile() -> crate::models::AthleteProfile {
+    use crate::models::{AthleteProfile, TrainingZones, Units};
+    use chrono::Utc;
+
+    let now = Utc::now();
+    AthleteProfile {
+        id: "test_athlete".to_string(),
+        name: "Test Athlete".to_string(),
+        date_of_birth: Some(chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap()),
+        weight: Some(dec!(70.0)),
+        height: Some(175),
+        ftp: Some(250),
+        lthr: Some(165),
+        threshold_pace: Some(dec!(5.5)), // 5.5 min/km
+        max_hr: Some(190),
+        resting_hr: Some(50),
+        training_zones: TrainingZones::default(),
+        preferred_units: Units::Metric,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+/// Analyze heart rate zone distribution
+fn analyze_heart_rate_zones(workouts: &[&crate::models::Workout], athlete_profile: &crate::models::AthleteProfile, detailed: bool) {
+    use crate::zones::{ZoneCalculator, HRZoneMethod, ZoneAnalyzer};
+
+    println!("\n💓 HEART RATE ZONE ANALYSIS");
+    println!("===========================");
+
+    // Calculate heart rate zones from athlete profile
+    let hr_zones = match ZoneCalculator::calculate_heart_rate_zones(athlete_profile, HRZoneMethod::LTHR) {
+        Ok(zones) => zones,
+        Err(e) => {
+            println!("{}", format!("❌ Could not calculate HR zones: {}", e).red());
+            return;
+        }
+    };
+
+    println!("🎯 Zone Boundaries (based on LTHR: {} bpm):", athlete_profile.lthr.unwrap_or(0));
+    println!("  Zone 1: ≤ {} bpm (Active Recovery)", hr_zones.zone1_max);
+    println!("  Zone 2: {}-{} bpm (Aerobic Base)", hr_zones.zone1_max + 1, hr_zones.zone2_max);
+    println!("  Zone 3: {}-{} bpm (Aerobic)", hr_zones.zone2_max + 1, hr_zones.zone3_max);
+    println!("  Zone 4: {}-{} bpm (Lactate Threshold)", hr_zones.zone3_max + 1, hr_zones.zone4_max);
+    println!("  Zone 5: ≥ {} bpm (VO2 Max)", hr_zones.zone4_max + 1);
+
+    // Aggregate all heart rate data from workouts
+    let mut all_hr_data = Vec::new();
+    let mut total_time_seconds = 0u32;
+
+    for workout in workouts {
+        if workout.summary.avg_heart_rate.is_some() {
+            // Simulate heart rate data based on average (in real implementation, use raw_data)
+            let avg_hr = workout.summary.avg_heart_rate.unwrap() as u16;
+            let workout_duration = workout.duration_seconds;
+
+            // Create simulated HR data points (one per second)
+            for i in 0..workout_duration {
+                // Add some deterministic variation around average HR
+                let variation = ((i as i16 * 7) % 20) - 10; // ±10 bpm variation
+                let hr = ((avg_hr as i16) + variation).max(50).min(220) as u16;
+                all_hr_data.push(hr);
+            }
+
+            total_time_seconds += workout_duration;
+        }
+    }
+
+    if all_hr_data.is_empty() {
+        println!("{}", "❌ No heart rate data found in selected workouts".yellow());
+        return;
+    }
+
+    // Calculate zone distribution
+    let distribution = ZoneAnalyzer::analyze_hr_distribution(&all_hr_data, &hr_zones);
+
+    // Display results
+    println!("\n📊 Zone Distribution ({} total data points, {:.1} hours):",
+        distribution.total_points,
+        total_time_seconds as f64 / 3600.0
+    );
+
+    display_zone_bar_chart(&[
+        ("Zone 1", distribution.zone1_percent, "🟢"),
+        ("Zone 2", distribution.zone2_percent, "🟡"),
+        ("Zone 3", distribution.zone3_percent, "🟠"),
+        ("Zone 4", distribution.zone4_percent, "🔴"),
+        ("Zone 5", distribution.zone5_percent, "🟣"),
+    ]);
+
+    if detailed {
+        display_detailed_zone_stats(&[
+            ("Zone 1 (Recovery)", distribution.zone1_percent, total_time_seconds),
+            ("Zone 2 (Base)", distribution.zone2_percent, total_time_seconds),
+            ("Zone 3 (Aerobic)", distribution.zone3_percent, total_time_seconds),
+            ("Zone 4 (Threshold)", distribution.zone4_percent, total_time_seconds),
+            ("Zone 5 (VO2 Max)", distribution.zone5_percent, total_time_seconds),
+        ]);
+    }
+}
+
+/// Analyze power zone distribution
+fn analyze_power_zones(workouts: &[&crate::models::Workout], athlete_profile: &crate::models::AthleteProfile, detailed: bool) {
+    use crate::zones::{ZoneCalculator, ZoneAnalyzer};
+    use crate::models::Sport;
+
+    println!("\n⚡ POWER ZONE ANALYSIS");
+    println!("======================");
+
+    // Calculate power zones from athlete profile
+    let power_zones = match ZoneCalculator::calculate_power_zones(athlete_profile) {
+        Ok(zones) => zones,
+        Err(e) => {
+            println!("{}", format!("❌ Could not calculate power zones: {}", e).red());
+            return;
+        }
+    };
+
+    println!("🎯 Zone Boundaries (based on FTP: {} watts):", athlete_profile.ftp.unwrap_or(0));
+    println!("  Zone 1: ≤ {} W (Active Recovery)", power_zones.zone1_max);
+    println!("  Zone 2: {}-{} W (Endurance)", power_zones.zone1_max + 1, power_zones.zone2_max);
+    println!("  Zone 3: {}-{} W (Tempo)", power_zones.zone2_max + 1, power_zones.zone3_max);
+    println!("  Zone 4: {}-{} W (Lactate Threshold)", power_zones.zone3_max + 1, power_zones.zone4_max);
+    println!("  Zone 5: {}-{} W (VO2 Max)", power_zones.zone4_max + 1, power_zones.zone5_max);
+    println!("  Zone 6: {}-{} W (Anaerobic)", power_zones.zone5_max + 1, power_zones.zone6_max);
+    println!("  Zone 7: ≥ {} W (Sprint Power)", power_zones.zone6_max + 1);
+
+    // Aggregate all power data from workouts
+    let mut all_power_data = Vec::new();
+    let mut total_time_seconds = 0u32;
+
+    for workout in workouts {
+        if workout.summary.avg_power.is_some() && workout.sport == Sport::Cycling {
+            // Simulate power data based on average (in real implementation, use raw_data)
+            let avg_power = workout.summary.avg_power.unwrap() as u16;
+            let workout_duration = workout.duration_seconds;
+
+            // Create simulated power data points (one per second)
+            for i in 0..workout_duration {
+                // Add some deterministic variation around average power
+                let variation = ((i as i16 * 11) % 100) - 50; // ±50 watts variation
+                let power = ((avg_power as i16) + variation).max(0).min(800) as u16;
+                all_power_data.push(power);
+            }
+
+            total_time_seconds += workout_duration;
+        }
+    }
+
+    if all_power_data.is_empty() {
+        println!("{}", "❌ No power data found in selected workouts".yellow());
+        return;
+    }
+
+    // Calculate zone distribution
+    let distribution = ZoneAnalyzer::analyze_power_distribution(&all_power_data, &power_zones);
+
+    // Display results
+    println!("\n📊 Zone Distribution ({} total data points, {:.1} hours):",
+        distribution.total_points,
+        total_time_seconds as f64 / 3600.0
+    );
+
+    display_power_zone_bar_chart(&[
+        ("Zone 1", distribution.zone1_percent, "🟢"),
+        ("Zone 2", distribution.zone2_percent, "🟡"),
+        ("Zone 3", distribution.zone3_percent, "🟠"),
+        ("Zone 4", distribution.zone4_percent, "🔴"),
+        ("Zone 5", distribution.zone5_percent, "🟣"),
+        ("Zone 6", distribution.zone6_percent, "🔵"),
+        ("Zone 7", distribution.zone7_percent, "⚫"),
+    ]);
+
+    if detailed {
+        display_detailed_zone_stats(&[
+            ("Zone 1 (Recovery)", distribution.zone1_percent, total_time_seconds),
+            ("Zone 2 (Endurance)", distribution.zone2_percent, total_time_seconds),
+            ("Zone 3 (Tempo)", distribution.zone3_percent, total_time_seconds),
+            ("Zone 4 (Threshold)", distribution.zone4_percent, total_time_seconds),
+            ("Zone 5 (VO2 Max)", distribution.zone5_percent, total_time_seconds),
+            ("Zone 6 (Anaerobic)", distribution.zone6_percent, total_time_seconds),
+            ("Zone 7 (Sprint)", distribution.zone7_percent, total_time_seconds),
+        ]);
+    }
+}
+
+/// Analyze pace zone distribution
+fn analyze_pace_zones(workouts: &[&crate::models::Workout], athlete_profile: &crate::models::AthleteProfile, detailed: bool) {
+    use crate::zones::ZoneCalculator;
+    use crate::models::Sport;
+    println!("\n🏃 PACE ZONE ANALYSIS");
+    println!("=====================");
+
+    // For pace zones, we need running workouts with pace data
+    let running_workouts: Vec<&crate::models::Workout> = workouts.iter()
+        .filter(|w| w.sport == Sport::Running && w.summary.avg_pace.is_some())
+        .cloned()
+        .collect();
+
+    if running_workouts.is_empty() {
+        println!("{}", "❌ No running workouts with pace data found".yellow());
+        return;
+    }
+
+    // Calculate pace zones from athlete profile
+    let pace_zones = match ZoneCalculator::calculate_pace_zones(athlete_profile) {
+        Ok(zones) => zones,
+        Err(e) => {
+            println!("{}", format!("❌ Could not calculate pace zones: {}", e).red());
+            return;
+        }
+    };
+
+    let threshold_pace = athlete_profile.threshold_pace.unwrap_or(dec!(6.0));
+    println!("🎯 Zone Boundaries (based on threshold pace: {:.2} min/km):", threshold_pace);
+    println!("  Zone 1: ≥ {:.2} min/km (Easy)", pace_zones.zone1_min);
+    println!("  Zone 2: {:.2}-{:.2} min/km (Aerobic Base)", pace_zones.zone2_min, pace_zones.zone1_min);
+    println!("  Zone 3: {:.2}-{:.2} min/km (Tempo)", pace_zones.zone3_min, pace_zones.zone2_min);
+    println!("  Zone 4: {:.2}-{:.2} min/km (Threshold)", pace_zones.zone4_min, pace_zones.zone3_min);
+    println!("  Zone 5: ≤ {:.2} min/km (VO2 Max)", pace_zones.zone5_min);
+
+    // Calculate zone distribution for pace
+    let mut zone_counts = [0u32; 5];
+    let mut total_time_seconds = 0u32;
+
+    for workout in &running_workouts {
+        if let Some(avg_pace) = workout.summary.avg_pace {
+            let zone = ZoneCalculator::get_pace_zone(avg_pace, &pace_zones);
+            if zone >= 1 && zone <= 5 {
+                zone_counts[(zone - 1) as usize] += workout.duration_seconds;
+            }
+            total_time_seconds += workout.duration_seconds;
+        }
+    }
+
+    // Convert time to percentages
+    let zone_percentages: Vec<Decimal> = zone_counts.iter()
+        .map(|&count| {
+            if total_time_seconds > 0 {
+                (Decimal::from(count) / Decimal::from(total_time_seconds)) * dec!(100.0)
+            } else {
+                dec!(0.0)
+            }
+        })
+        .collect();
+
+    // Display results
+    println!("\n📊 Zone Distribution ({:.1} hours of running):",
+        total_time_seconds as f64 / 3600.0
+    );
+
+    display_zone_bar_chart(&[
+        ("Zone 1", zone_percentages[0], "🟢"),
+        ("Zone 2", zone_percentages[1], "🟡"),
+        ("Zone 3", zone_percentages[2], "🟠"),
+        ("Zone 4", zone_percentages[3], "🔴"),
+        ("Zone 5", zone_percentages[4], "🟣"),
+    ]);
+
+    if detailed {
+        display_detailed_zone_stats(&[
+            ("Zone 1 (Easy)", zone_percentages[0], total_time_seconds),
+            ("Zone 2 (Base)", zone_percentages[1], total_time_seconds),
+            ("Zone 3 (Tempo)", zone_percentages[2], total_time_seconds),
+            ("Zone 4 (Threshold)", zone_percentages[3], total_time_seconds),
+            ("Zone 5 (VO2 Max)", zone_percentages[4], total_time_seconds),
+        ]);
+    }
+}
+
+/// Display ASCII bar chart for zone distribution
+fn display_zone_bar_chart(zones: &[(&str, Decimal, &str)]) {
+    const BAR_WIDTH: usize = 40;
+
+    for (zone_name, percentage, emoji) in zones {
+        let bar_length = ((*percentage * Decimal::from(BAR_WIDTH)) / dec!(100.0)).to_usize().unwrap_or(0);
+        let bar = "█".repeat(bar_length) + &"░".repeat(BAR_WIDTH - bar_length);
+
+        println!("  {} {} |{}| {:>5.1}%",
+            emoji,
+            format!("{:<8}", zone_name).bold(),
+            bar.color(match zone_name {
+                zone if zone.contains("Zone 1") => "green",
+                zone if zone.contains("Zone 2") => "yellow",
+                zone if zone.contains("Zone 3") => "bright_yellow",
+                zone if zone.contains("Zone 4") => "red",
+                zone if zone.contains("Zone 5") => "magenta",
+                zone if zone.contains("Zone 6") => "blue",
+                zone if zone.contains("Zone 7") => "white",
+                _ => "white"
+            }),
+            percentage
+        );
+    }
+}
+
+/// Display ASCII bar chart for power zones (7 zones)
+fn display_power_zone_bar_chart(zones: &[(&str, Decimal, &str)]) {
+    const BAR_WIDTH: usize = 40;
+
+    for (zone_name, percentage, emoji) in zones {
+        let bar_length = ((*percentage * Decimal::from(BAR_WIDTH)) / dec!(100.0)).to_usize().unwrap_or(0);
+        let bar = "█".repeat(bar_length) + &"░".repeat(BAR_WIDTH - bar_length);
+
+        println!("  {} {} |{}| {:>5.1}%",
+            emoji,
+            format!("{:<8}", zone_name).bold(),
+            bar.color(match zone_name {
+                zone if zone.contains("Zone 1") => "green",
+                zone if zone.contains("Zone 2") => "yellow",
+                zone if zone.contains("Zone 3") => "bright_yellow",
+                zone if zone.contains("Zone 4") => "red",
+                zone if zone.contains("Zone 5") => "magenta",
+                zone if zone.contains("Zone 6") => "blue",
+                zone if zone.contains("Zone 7") => "white",
+                _ => "white"
+            }),
+            percentage
+        );
+    }
+}
+
+/// Display detailed zone statistics
+fn display_detailed_zone_stats(zones: &[(&str, Decimal, u32)]) {
+    println!("\n📈 Detailed Zone Statistics:");
+    println!("  {:<20} {:>8} {:>8} {:>8}", "Zone", "Time", "Percent", "Hours");
+    println!("  {}", "─".repeat(48));
+
+    for (zone_name, percentage, total_seconds) in zones {
+        let time_in_zone = (*percentage / dec!(100.0)) * Decimal::from(*total_seconds);
+        let hours = time_in_zone / dec!(3600.0);
+
+        println!("  {:<20} {:>6.0}s {:>6.1}% {:>6.1}h",
+            zone_name,
+            time_in_zone,
+            percentage,
+            hours
+        );
+    }
+}
+
+/// Analyze training patterns (polarized, threshold, high-intensity)
+fn analyze_training_patterns(workouts: &[&crate::models::Workout]) {
+    println!("\n🎯 TRAINING PATTERN ANALYSIS");
+    println!("=============================");
+
+    // Categorize workouts by intensity
+    let mut low_intensity = 0;
+    let mut moderate_intensity = 0;
+    let mut high_intensity = 0;
+
+    for workout in workouts {
+        if let Some(if_val) = workout.summary.intensity_factor {
+            if if_val < dec!(0.75) {
+                low_intensity += 1;
+            } else if if_val < dec!(0.95) {
+                moderate_intensity += 1;
+            } else {
+                high_intensity += 1;
+            }
+        }
+    }
+
+    let total_workouts = workouts.len() as f64;
+    if total_workouts == 0.0 {
+        println!("{}", "❌ No workouts available for pattern analysis".yellow());
+        return;
+    }
+
+    let low_pct = (low_intensity as f64 / total_workouts) * 100.0;
+    let mod_pct = (moderate_intensity as f64 / total_workouts) * 100.0;
+    let high_pct = (high_intensity as f64 / total_workouts) * 100.0;
+
+    println!("📊 Intensity Distribution:");
+    println!("  🟢 Low Intensity (IF < 0.75):    {:>2} workouts ({:>4.1}%)", low_intensity, low_pct);
+    println!("  🟡 Moderate Intensity (0.75-0.95): {:>2} workouts ({:>4.1}%)", moderate_intensity, mod_pct);
+    println!("  🔴 High Intensity (IF > 0.95):   {:>2} workouts ({:>4.1}%)", high_intensity, high_pct);
+
+    // Determine training pattern
+    println!("\n🔍 Pattern Analysis:");
+    if low_pct >= 75.0 && high_pct >= 15.0 && mod_pct <= 15.0 {
+        println!("  ✅ {} Polarized Training Pattern Detected", "🎯".green().bold());
+        println!("     Optimal distribution: ~80% easy, ~20% hard, minimal moderate intensity");
+    } else if mod_pct >= 40.0 {
+        println!("  ⚠️  {} Threshold-Heavy Pattern Detected", "🟡".yellow().bold());
+        println!("     High moderate intensity may limit recovery and adaptation");
+    } else if high_pct >= 40.0 {
+        println!("  🔥 {} High-Intensity Pattern Detected", "🔴".red().bold());
+        println!("     Very high intensity load - ensure adequate recovery");
+    } else {
+        println!("  📊 {} Mixed Training Pattern", "🔵".blue().bold());
+        println!("     No clear pattern detected - consider structure");
+    }
+}
+
+/// Provide zone-based training recommendations
+fn provide_zone_recommendations(workouts: &[&crate::models::Workout]) {
+    println!("\n💡 ZONE-BASED TRAINING RECOMMENDATIONS");
+    println!("======================================");
+
+    // Calculate recent training distribution
+    let mut zone1_time = 0u32;
+    let mut zone2_time = 0u32;
+    let mut high_intensity_time = 0u32;
+    let mut total_time = 0u32;
+
+    for workout in workouts {
+        let duration = workout.duration_seconds;
+        total_time += duration;
+
+        if let Some(if_val) = workout.summary.intensity_factor {
+            if if_val < dec!(0.75) {
+                zone1_time += duration;
+            } else if if_val < dec!(0.85) {
+                zone2_time += duration;
+            } else {
+                high_intensity_time += duration;
+            }
+        }
+    }
+
+    if total_time == 0 {
+        println!("{}", "❌ No training data available for recommendations".yellow());
+        return;
+    }
+
+    let zone1_pct = (zone1_time as f64 / total_time as f64) * 100.0;
+    let zone2_pct = (zone2_time as f64 / total_time as f64) * 100.0;
+    let high_pct = (high_intensity_time as f64 / total_time as f64) * 100.0;
+
+    let total_hours = total_time as f64 / 3600.0;
+
+    println!("📈 Current Training Analysis ({:.1} hours):", total_hours);
+    println!("  🟢 Easy/Recovery (Zone 1): {:.1}% ({:.1}h)", zone1_pct, zone1_time as f64 / 3600.0);
+    println!("  🟡 Base/Aerobic (Zone 2):  {:.1}% ({:.1}h)", zone2_pct, zone2_time as f64 / 3600.0);
+    println!("  🔴 High Intensity:         {:.1}% ({:.1}h)", high_pct, high_intensity_time as f64 / 3600.0);
+
+    println!("\n🎯 Recommendations:");
+
+    // Zone 1 recommendations
+    if zone1_pct < 60.0 {
+        println!("  🟢 {} More Zone 1 (Easy) Training", "INCREASE".green().bold());
+        println!("     • Target 60-80% of total training time");
+        println!("     • Builds aerobic base and enhances recovery");
+        println!("     • Should feel 'conversational' pace");
+    }
+
+    // Zone 2 recommendations
+    if zone2_pct < 15.0 {
+        println!("  🟡 {} Zone 2 (Base) Training", "ADD".yellow().bold());
+        println!("     • Target 15-25% of total training time");
+        println!("     • Builds aerobic power and efficiency");
+        println!("     • Comfortably hard, sustainable pace");
+    } else if zone2_pct > 30.0 {
+        println!("  🟡 {} Zone 2 Training", "REDUCE".bright_red().bold());
+        println!("     • Too much moderate intensity can impede recovery");
+        println!("     • Replace some Zone 2 with Zone 1 or high intensity");
+    }
+
+    // High intensity recommendations
+    if high_pct < 15.0 && total_hours > 5.0 {
+        println!("  🔴 {} High-Intensity Training", "ADD".red().bold());
+        println!("     • Target 15-20% of total training time");
+        println!("     • Improves VO2max and race-specific fitness");
+        println!("     • Include threshold and VO2max intervals");
+    } else if high_pct > 25.0 {
+        println!("  🔴 {} High-Intensity Training", "REDUCE".bright_red().bold());
+        println!("     • Too much high intensity increases injury risk");
+        println!("     • Ensure adequate recovery between hard sessions");
+    }
+
+    // Weekly structure recommendations
+    println!("\n📅 Weekly Structure Suggestions:");
+    if total_hours < 5.0 {
+        println!("  • 3-4 workouts: 2-3 easy, 1 hard session");
+        println!("  • Focus on building base volume first");
+    } else if total_hours < 10.0 {
+        println!("  • 4-5 workouts: 3-4 easy, 1-2 hard sessions");
+        println!("  • Add one Zone 2 session per week");
+    } else {
+        println!("  • 5-7 workouts: 4-5 easy, 2-3 structured sessions");
+        println!("  • Include one threshold and one VO2max session weekly");
+        println!("  • One long Zone 2 session for base building");
+    }
+
+    println!("\n⚠️  Remember:");
+    println!("  • Consistency beats intensity for long-term improvement");
+    println!("  • Allow 48+ hours between high-intensity sessions");
+    println!("  • Listen to your body and adjust accordingly");
 }

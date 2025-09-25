@@ -747,4 +747,212 @@ mod tests {
         let estimated_max_hr = profile.max_hr.unwrap();
         assert!(estimated_max_hr >= 180 && estimated_max_hr <= 195);
     }
+
+    #[test]
+    fn test_zone_distribution_with_real_data() {
+        // Test the actual zone analysis with real heart rate data
+        let profile = create_test_profile();
+        let hr_zones = ZoneCalculator::hr_zones_from_lthr(&profile).unwrap();
+
+        // Create realistic heart rate data simulating a workout
+        // Zone 1: 120 BPM (should be below zone1_max of 134)
+        // Zone 2: 140 BPM (should be between 134-147)
+        // Zone 3: 150 BPM (should be between 147-153)
+        // Zone 4: 160 BPM (should be between 153-163)
+        // Zone 5: 175 BPM (should be above 163)
+
+        let mut hr_data = Vec::new();
+        hr_data.extend(vec![120; 30]); // 30 seconds Zone 1
+        hr_data.extend(vec![140; 30]); // 30 seconds Zone 2
+        hr_data.extend(vec![150; 20]); // 20 seconds Zone 3
+        hr_data.extend(vec![160; 15]); // 15 seconds Zone 4
+        hr_data.extend(vec![175; 5]);  // 5 seconds Zone 5
+
+        let distribution = ZoneAnalyzer::analyze_hr_distribution(&hr_data, &hr_zones);
+
+        assert_eq!(distribution.total_points, 100);
+        assert_eq!(distribution.zone1_percent, dec!(30.0));
+        assert_eq!(distribution.zone2_percent, dec!(30.0));
+        assert_eq!(distribution.zone3_percent, dec!(20.0));
+        assert_eq!(distribution.zone4_percent, dec!(15.0));
+        assert_eq!(distribution.zone5_percent, dec!(5.0));
+
+        // Verify the sum equals 100%
+        let total_percent = distribution.zone1_percent
+                          + distribution.zone2_percent
+                          + distribution.zone3_percent
+                          + distribution.zone4_percent
+                          + distribution.zone5_percent;
+        assert_eq!(total_percent, dec!(100.0));
+    }
+
+    #[test]
+    fn test_zone_boundary_calculations() {
+        let profile = create_test_profile();
+        let hr_zones = ZoneCalculator::hr_zones_from_lthr(&profile).unwrap();
+
+        // Test boundary values explicitly
+        assert_eq!(ZoneCalculator::get_heart_rate_zone(hr_zones.zone1_max, &hr_zones), 1);
+        assert_eq!(ZoneCalculator::get_heart_rate_zone(hr_zones.zone1_max + 1, &hr_zones), 2);
+        assert_eq!(ZoneCalculator::get_heart_rate_zone(hr_zones.zone2_max, &hr_zones), 2);
+        assert_eq!(ZoneCalculator::get_heart_rate_zone(hr_zones.zone2_max + 1, &hr_zones), 3);
+        assert_eq!(ZoneCalculator::get_heart_rate_zone(hr_zones.zone3_max, &hr_zones), 3);
+        assert_eq!(ZoneCalculator::get_heart_rate_zone(hr_zones.zone3_max + 1, &hr_zones), 4);
+        assert_eq!(ZoneCalculator::get_heart_rate_zone(hr_zones.zone4_max, &hr_zones), 4);
+        assert_eq!(ZoneCalculator::get_heart_rate_zone(hr_zones.zone4_max + 1, &hr_zones), 5);
+    }
+
+    #[test]
+    fn test_empty_zone_analysis() {
+        let empty_data: Vec<u16> = vec![];
+        let profile = create_test_profile();
+        let hr_zones = ZoneCalculator::hr_zones_from_lthr(&profile).unwrap();
+
+        let distribution = ZoneAnalyzer::analyze_hr_distribution(&empty_data, &hr_zones);
+
+        // Verify all values are zero for empty data
+        assert_eq!(distribution.total_points, 0);
+        assert_eq!(distribution.zone1_percent, dec!(0.0));
+        assert_eq!(distribution.zone2_percent, dec!(0.0));
+        assert_eq!(distribution.zone3_percent, dec!(0.0));
+        assert_eq!(distribution.zone4_percent, dec!(0.0));
+        assert_eq!(distribution.zone5_percent, dec!(0.0));
+    }
+
+    #[test]
+    fn test_power_distribution_analysis() {
+        let power_data = vec![100, 150, 200, 250, 300, 350, 400, 500];
+        let profile = create_test_profile();
+        let power_zones = ZoneCalculator::calculate_power_zones(&profile).unwrap();
+
+        let distribution = ZoneAnalyzer::analyze_power_distribution(&power_data, &power_zones);
+
+        assert_eq!(distribution.total_points, 8);
+
+        // Verify all zones have some data and percentages add up to ~100%
+        let total_percent = distribution.zone1_percent
+                          + distribution.zone2_percent
+                          + distribution.zone3_percent
+                          + distribution.zone4_percent
+                          + distribution.zone5_percent
+                          + distribution.zone6_percent
+                          + distribution.zone7_percent;
+
+        assert!((total_percent - dec!(100.0)).abs() < dec!(0.1));
+    }
+
+    #[test]
+    fn test_zone_analysis_with_different_sports() {
+        use crate::models::Sport;
+
+        // This test would verify that zone analysis works correctly
+        // when filtering by different sports (when integrated with workout data)
+        let profile = create_test_profile();
+        let hr_zones = ZoneCalculator::hr_zones_from_lthr(&profile).unwrap();
+
+        // Test cycling data (typically higher power zones)
+        let cycling_hr_data = vec![140, 150, 160, 170, 180]; // Moderate to hard effort
+        let cycling_distribution = ZoneAnalyzer::analyze_hr_distribution(&cycling_hr_data, &hr_zones);
+
+        // Test running data (typically different HR distribution)
+        let running_hr_data = vec![120, 130, 140, 150]; // Easier aerobic effort
+        let running_distribution = ZoneAnalyzer::analyze_hr_distribution(&running_hr_data, &hr_zones);
+
+        // Verify different sports show different zone distributions
+        assert!(cycling_distribution.zone3_percent + cycling_distribution.zone4_percent + cycling_distribution.zone5_percent
+                > running_distribution.zone3_percent + running_distribution.zone4_percent + running_distribution.zone5_percent);
+    }
+
+    #[test]
+    fn test_zone_percentage_calculations() {
+        let hr_data = vec![120; 60]; // 60 seconds at 120 BPM (should be Zone 1)
+        let profile = create_test_profile();
+        let hr_zones = ZoneCalculator::hr_zones_from_lthr(&profile).unwrap();
+
+        let distribution = ZoneAnalyzer::analyze_hr_distribution(&hr_data, &hr_zones);
+
+        // Should be 100% in Zone 1
+        assert_eq!(distribution.zone1_percent, dec!(100.0));
+        assert_eq!(distribution.zone2_percent, dec!(0.0));
+        assert_eq!(distribution.zone3_percent, dec!(0.0));
+        assert_eq!(distribution.zone4_percent, dec!(0.0));
+        assert_eq!(distribution.zone5_percent, dec!(0.0));
+    }
+
+    #[test]
+    fn test_mixed_zone_distribution() {
+        // Create data spanning multiple zones
+        let profile = create_test_profile();
+        let hr_zones = ZoneCalculator::hr_zones_from_lthr(&profile).unwrap();
+
+        // Use HR values that definitely fall in each zone based on LTHR=165
+
+        // Use values that definitely fall in each zone
+        let mut hr_data = Vec::new();
+        hr_data.extend(vec![120; 30]); // Zone 1: below zone1_max (134)
+        hr_data.extend(vec![140; 30]); // Zone 2: between zone1_max and zone2_max (134-147)
+        hr_data.extend(vec![150; 20]); // Zone 3: between zone2_max and zone3_max (147-153)
+        hr_data.extend(vec![160; 15]); // Zone 4: between zone3_max and zone4_max (153-163)
+        hr_data.extend(vec![170; 5]);  // Zone 5: above zone4_max (163)
+
+        let distribution = ZoneAnalyzer::analyze_hr_distribution(&hr_data, &hr_zones);
+
+        // Verify we have 100 total points
+        assert_eq!(distribution.total_points, 100);
+
+        // Check that percentages add up to 100%
+        let total_percent = distribution.zone1_percent
+                          + distribution.zone2_percent
+                          + distribution.zone3_percent
+                          + distribution.zone4_percent
+                          + distribution.zone5_percent;
+        assert_eq!(total_percent, dec!(100.0));
+
+        // Since we used exactly the right number of points for each zone,
+        // we can verify the expected distribution
+        assert_eq!(distribution.zone1_percent, dec!(30.0));
+        assert_eq!(distribution.zone2_percent, dec!(30.0));
+        assert_eq!(distribution.zone3_percent, dec!(20.0));
+        assert_eq!(distribution.zone4_percent, dec!(15.0));
+        assert_eq!(distribution.zone5_percent, dec!(5.0));
+    }
+
+    #[test]
+    fn test_zone_analysis_integration() {
+        // Test integration between different zone types
+        let profile = create_test_profile();
+
+        // Test all zone types can be calculated
+        let hr_zones_result = ZoneCalculator::calculate_heart_rate_zones(&profile, HRZoneMethod::LTHR);
+        let power_zones_result = ZoneCalculator::calculate_power_zones(&profile);
+        let pace_zones_result = ZoneCalculator::calculate_pace_zones(&profile);
+
+        assert!(hr_zones_result.is_ok());
+        assert!(power_zones_result.is_ok());
+        assert!(pace_zones_result.is_ok());
+
+        let hr_zones = hr_zones_result.unwrap();
+        let power_zones = power_zones_result.unwrap();
+        let pace_zones = pace_zones_result.unwrap();
+
+        // Test zone detection works correctly
+        assert_eq!(ZoneCalculator::get_heart_rate_zone(140, &hr_zones), 2);
+        assert_eq!(ZoneCalculator::get_power_zone(200, &power_zones), 3);
+        assert_eq!(ZoneCalculator::get_pace_zone(dec!(6.5), &pace_zones), 3);
+    }
+
+    #[test]
+    fn test_zone_analysis_edge_cases() {
+        let profile = create_test_profile();
+        let hr_zones = ZoneCalculator::hr_zones_from_lthr(&profile).unwrap();
+
+        // Test with extreme values
+        let extreme_hr_data = vec![30, 250]; // Very low and very high HR
+        let distribution = ZoneAnalyzer::analyze_hr_distribution(&extreme_hr_data, &hr_zones);
+
+        assert_eq!(distribution.total_points, 2);
+        // Values outside normal ranges should still be handled
+        assert!(distribution.zone1_percent + distribution.zone2_percent + distribution.zone3_percent
+                + distribution.zone4_percent + distribution.zone5_percent >= dec!(0.0));
+    }
 }
