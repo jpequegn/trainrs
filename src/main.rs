@@ -13,6 +13,7 @@ mod import;
 mod models;
 mod pmc;
 mod power;
+mod running;
 mod tss;
 mod zones;
 
@@ -359,6 +360,12 @@ enum Commands {
         command: PowerCommands,
     },
 
+    /// Running pace and performance analysis
+    Running {
+        #[command(subcommand)]
+        command: RunningCommands,
+    },
+
     /// Configure application settings
     Config {
         /// List all configuration options
@@ -453,6 +460,141 @@ enum PowerCommands {
         /// Show power balance analysis
         #[arg(long)]
         balance: bool,
+
+        /// Export detailed analysis
+        #[arg(long)]
+        export: Option<PathBuf>,
+    },
+}
+
+/// Running analysis subcommands
+#[derive(Subcommand)]
+enum RunningCommands {
+    /// Analyze running pace (GAP, NGP, pace distribution, splits)
+    Pace {
+        /// Input workout file with running data
+        #[arg(short, long)]
+        file: PathBuf,
+
+        /// Distance unit (km or miles)
+        #[arg(long, default_value = "km")]
+        unit: String,
+
+        /// Show detailed splits analysis
+        #[arg(long)]
+        splits: bool,
+
+        /// Show pace distribution
+        #[arg(long)]
+        distribution: bool,
+
+        /// Export results to file
+        #[arg(long)]
+        export: Option<PathBuf>,
+    },
+
+    /// Analyze elevation impact and VAM calculations
+    Elevation {
+        /// Input workout file with elevation data
+        #[arg(short, long)]
+        file: PathBuf,
+
+        /// Show detailed gradient analysis
+        #[arg(long)]
+        gradients: bool,
+
+        /// Calculate VAM (Vertical Ascent Meters per hour)
+        #[arg(long)]
+        vam: bool,
+
+        /// Show gradient-adjusted training stress
+        #[arg(long)]
+        stress: bool,
+
+        /// Export results to file
+        #[arg(long)]
+        export: Option<PathBuf>,
+    },
+
+    /// Performance predictions using VDOT methodology
+    Performance {
+        /// Recent running workout files (CSV format)
+        #[arg(short, long)]
+        files: Vec<PathBuf>,
+
+        /// Manual recent race time (e.g., "21:30" for 5K)
+        #[arg(long)]
+        race_time: Option<String>,
+
+        /// Race distance for manual time (5k, 10k, half, marathon)
+        #[arg(long)]
+        race_distance: Option<String>,
+
+        /// Show race time predictions for all distances
+        #[arg(long)]
+        predict_all: bool,
+
+        /// Target race distance for specific prediction
+        #[arg(long)]
+        target_distance: Option<String>,
+
+        /// Athlete to analyze
+        #[arg(long)]
+        athlete: Option<String>,
+    },
+
+    /// Calculate running training zones based on performance
+    Zones {
+        /// Input file with recent running performance data
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+
+        /// Manual threshold pace (min/km or min/mile)
+        #[arg(long)]
+        threshold_pace: Option<f64>,
+
+        /// Manual VDOT value
+        #[arg(long)]
+        vdot: Option<f64>,
+
+        /// Include heart rate zones if available
+        #[arg(long)]
+        include_hr: bool,
+
+        /// Distance unit (km or miles)
+        #[arg(long, default_value = "km")]
+        unit: String,
+
+        /// Athlete profile to work with
+        #[arg(long)]
+        athlete: Option<String>,
+    },
+
+    /// Comprehensive analysis of a single running workout
+    Analyze {
+        /// Input workout file
+        #[arg(short, long)]
+        file: PathBuf,
+
+        /// Include pace analysis
+        #[arg(long)]
+        pace: bool,
+
+        /// Include elevation analysis
+        #[arg(long)]
+        elevation: bool,
+
+        /// Include performance predictions
+        #[arg(long)]
+        performance: bool,
+
+        /// Show all analysis types
+        #[arg(long)]
+        all: bool,
+
+        /// Distance unit (km or miles)
+        #[arg(long, default_value = "km")]
+        unit: String,
 
         /// Export detailed analysis
         #[arg(long)]
@@ -1244,6 +1386,13 @@ fn main() -> Result<()> {
             });
         }
 
+        Commands::Running { ref command } => {
+            handle_running_commands(command, &cli).unwrap_or_else(|e| {
+                eprintln!("{}", format!("Running analysis error: {}", e).red());
+                std::process::exit(1);
+            });
+        }
+
         Commands::Config { list, set, get } => {
             println!("{}", "Managing configuration...".white().bold());
             if list {
@@ -1858,6 +2007,305 @@ fn create_sample_workouts() -> Vec<crate::models::Workout> {
     ]
 }
 
+/// Handle running analysis commands
+fn handle_running_commands(command: &RunningCommands, cli: &Cli) -> Result<()> {
+    use crate::running::RunningAnalyzer;
+    use colored::Colorize;
+    use crate::import::ImportManager;
+
+    match command {
+        RunningCommands::Pace {
+            file,
+            unit,
+            splits,
+            distribution,
+            export,
+        } => {
+            println!("{}", "🏃 Analyzing running pace...".green().bold());
+            println!("  📁 File: {}", file.display());
+            println!("  📏 Unit: {}", unit);
+
+            // Import workout data
+            let manager = ImportManager::new();
+            match manager.import_file(file) {
+                Ok(workouts) => {
+                    if workouts.is_empty() {
+                        eprintln!("{}", "✗ No workout data found in file".red());
+                        return Ok(());
+                    }
+
+                    let workout = &workouts[0];
+                    match RunningAnalyzer::analyze_pace(workout) {
+                            Ok(pace_analysis) => {
+                                display_pace_analysis(&pace_analysis, unit);
+
+                                if *distribution {
+                                    // TODO: Calculate and display pace distribution
+                                    println!("\n📊 PACE DISTRIBUTION");
+                                    println!("====================");
+                                    println!("Distribution analysis coming soon...");
+                                }
+
+                                if *splits {
+                                    // TODO: Calculate and display splits
+                                    println!("\n🔀 SPLITS ANALYSIS");
+                                    println!("==================");
+                                    println!("Splits analysis coming soon...");
+                                }
+
+                                if let Some(export_path) = export {
+                                    println!("  💾 Exporting to: {}", export_path.display());
+                                    // TODO: Implement pace analysis export
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("{}", format!("Failed to analyze pace: {}", e).red());
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{}", format!("Failed to import workout file: {}", e).red());
+                }
+            }
+
+            println!("{}", "✓ Pace analysis completed".green());
+        }
+
+        RunningCommands::Elevation {
+            file,
+            gradients,
+            vam,
+            stress,
+            export,
+        } => {
+            println!("{}", "⛰️ Analyzing elevation impact...".cyan().bold());
+            println!("  📁 File: {}", file.display());
+
+            // Import workout data
+            let manager = ImportManager::new();
+            match manager.import_file(file) {
+                Ok(workouts) => {
+                    if workouts.is_empty() {
+                        eprintln!("{}", "✗ No workout data found in file".red());
+                        return Ok(());
+                    }
+
+                    let workout = &workouts[0];
+                    match RunningAnalyzer::analyze_elevation(workout) {
+                            Ok(elevation_analysis) => {
+                                display_elevation_analysis(&elevation_analysis);
+
+                                if *gradients {
+                                    println!("\n📈 GRADIENT ANALYSIS");
+                                    println!("====================");
+                                    println!("Average Gradient: {:.2}%", elevation_analysis.avg_gradient);
+                                    println!("Max Gradient: {:.2}%", elevation_analysis.max_gradient);
+                                }
+
+                                if *vam {
+                                    println!("\n🚀 VAM CALCULATIONS");
+                                    println!("===================");
+                                    println!("Vertical Ascent Rate: {:.0} m/hour", elevation_analysis.vam);
+                                }
+
+                                if *stress {
+                                    println!("\n💪 GRADIENT-ADJUSTED TRAINING STRESS");
+                                    println!("====================================");
+                                    println!("Gradient Stress Factor: {:.3}", elevation_analysis.gradient_adjusted_stress);
+                                }
+
+                                if let Some(export_path) = export {
+                                    println!("  💾 Exporting to: {}", export_path.display());
+                                    // TODO: Implement elevation analysis export
+                                }
+                        }
+                        Err(e) => {
+                            eprintln!("{}", format!("Failed to analyze elevation: {}", e).red());
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{}", format!("Failed to import workout file: {}", e).red());
+                }
+            }
+
+            println!("{}", "✓ Elevation analysis completed".cyan());
+        }
+
+        RunningCommands::Performance {
+            files,
+            race_time,
+            race_distance,
+            predict_all,
+            target_distance,
+            athlete,
+        } => {
+            println!("{}", "🚀 Analyzing performance predictions...".blue().bold());
+
+            let athlete_id = athlete.clone().or_else(|| cli.athlete.clone());
+            if let Some(a) = &athlete_id {
+                println!("  Athlete: {}", a);
+            }
+
+            // Use manual race time if provided
+            if let (Some(time_str), Some(distance_str)) = (race_time, race_distance) {
+                println!("  📊 Using manual race data: {} for {}", time_str, distance_str);
+
+                // TODO: Implement race time parsing and VDOT calculation
+                println!("Race time analysis coming soon...");
+
+                // For now, use a sample prediction
+                // match RunningAnalyzer::predict_performance(sample_time, sample_distance) {
+                //     Ok(predictions) => {
+                //         display_performance_predictions(&predictions, *predict_all, target_distance);
+                //     }
+                //     Err(e) => {
+                //         eprintln!("{}", format!("Failed to generate predictions: {}", e).red());
+                //     }
+                // }
+            } else if !files.is_empty() {
+                println!("  📁 Analyzing {} workout files", files.len());
+                // TODO: Analyze multiple workout files to estimate VDOT
+                println!("Multi-file analysis coming soon...");
+            } else {
+                eprintln!("{}", "✗ Must provide either race data (--race-time and --race-distance) or workout files (--files)".red());
+                return Ok(());
+            }
+
+            println!("{}", "✓ Performance analysis completed".blue());
+        }
+
+        RunningCommands::Zones {
+            file,
+            threshold_pace,
+            vdot,
+            include_hr,
+            unit,
+            athlete,
+        } => {
+            println!("{}", "🎯 Calculating running training zones...".yellow().bold());
+
+            let athlete_id = athlete.clone().or_else(|| cli.athlete.clone());
+            if let Some(a) = &athlete_id {
+                println!("  Athlete: {}", a);
+            }
+            println!("  📏 Unit: {}", unit);
+
+            // Calculate zones based on provided data
+            if let Some(vdot_val) = vdot {
+                println!("  📊 Using manual VDOT: {:.1}", vdot_val);
+                println!("VDOT-based zone calculation coming soon...");
+
+                // TODO: Implement VDOT to training zones calculation
+                // match RunningAnalyzer::calculate_training_zones(*vdot_val) {
+                //     Ok(zones) => {
+                //         display_training_zones(&zones, unit, *include_hr);
+                //     }
+                //     Err(e) => {
+                //         eprintln!("{}", format!("Failed to calculate zones: {}", e).red());
+                //     }
+                // }
+            } else if let Some(pace_val) = threshold_pace {
+                println!("  ⏱️ Using threshold pace: {:.2} min/{}", pace_val, unit);
+
+                let threshold_pace_decimal = rust_decimal::Decimal::from_f64(*pace_val).unwrap_or(dec!(4.0));
+
+                // Use the actual method signature from running.rs
+                match RunningAnalyzer::calculate_running_zones(threshold_pace_decimal, None) {
+                    Ok(zones) => {
+                        display_running_zones(&zones, unit, *include_hr);
+                    }
+                    Err(e) => {
+                        eprintln!("{}", format!("Failed to calculate zones: {}", e).red());
+                    }
+                }
+            } else if let Some(file_path) = file {
+                println!("  📁 Analyzing workout file: {}", file_path.display());
+                // TODO: Calculate zones from workout file analysis
+                println!("Workout file analysis coming soon...");
+            } else {
+                eprintln!("{}", "✗ Must provide either --vdot, --threshold-pace, or --file".red());
+                return Ok(());
+            }
+
+            println!("{}", "✓ Training zones calculated".yellow());
+        }
+
+        RunningCommands::Analyze {
+            file,
+            pace,
+            elevation,
+            performance,
+            all,
+            unit,
+            export,
+        } => {
+            println!("{}", "🔍 Comprehensive running analysis...".magenta().bold());
+            println!("  📁 File: {}", file.display());
+            println!("  📏 Unit: {}", unit);
+
+            // Import workout data
+            let manager = ImportManager::new();
+            match manager.import_file(file) {
+                Ok(workouts) => {
+                    if workouts.is_empty() {
+                        eprintln!("{}", "✗ No workout data found in file".red());
+                        return Ok(());
+                    }
+
+                    let workout = &workouts[0];
+
+                    // Pace analysis
+                    if *all || *pace {
+                        println!("\n🏃 PACE ANALYSIS");
+                        println!("================");
+                        match RunningAnalyzer::analyze_pace(workout) {
+                            Ok(pace_analysis) => {
+                                display_pace_analysis(&pace_analysis, unit);
+                            }
+                            Err(e) => {
+                                eprintln!("{}", format!("Pace analysis failed: {}", e).red());
+                            }
+                        }
+                    }
+
+                    // Elevation analysis
+                    if *all || *elevation {
+                        println!("\n⛰️ ELEVATION ANALYSIS");
+                        println!("=====================");
+                        match RunningAnalyzer::analyze_elevation(workout) {
+                            Ok(elevation_analysis) => {
+                                display_elevation_analysis(&elevation_analysis);
+                            }
+                            Err(e) => {
+                                eprintln!("{}", format!("Elevation analysis failed: {}", e).red());
+                            }
+                        }
+                    }
+
+                    // Performance predictions (requires estimating VDOT from workout)
+                    if *all || *performance {
+                        println!("\n🚀 PERFORMANCE PREDICTIONS");
+                        println!("==========================");
+                        println!("Performance predictions from single workout coming soon...");
+                        // TODO: Estimate VDOT from workout data and generate predictions
+                    }
+
+                    if let Some(export_path) = export {
+                        println!("  💾 Exporting comprehensive analysis to: {}", export_path.display());
+                        // TODO: Implement comprehensive analysis export
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{}", format!("Failed to import workout file: {}", e).red());
+                }
+            }
+
+            println!("{}", "✓ Comprehensive analysis completed".magenta());
+        }
+    }
+
+    Ok(())
 }
 
 /// Handle power analysis commands
@@ -2061,6 +2509,210 @@ fn handle_power_commands(command: &PowerCommands, cli: &Cli) -> Result<()> {
     }
 
     Ok(())
+}
+
+// Helper functions for running analysis displays
+
+/// Display pace analysis results
+fn display_pace_analysis(pace_analysis: &crate::running::PaceAnalysis, unit: &str) {
+    use colored::Colorize;
+
+    println!("\n🏃 PACE ANALYSIS");
+    println!("================\n");
+
+    println!("{}", "📈 PACE METRICS".blue().bold());
+    println!("================");
+
+    println!("Average Pace:          {:>8.2} min/{}", pace_analysis.avg_pace, unit);
+    println!("Grade Adjusted Pace:   {:>8.2} min/{}", pace_analysis.grade_adjusted_pace, unit);
+    println!("Normalized Graded Pace:{:>8.2} min/{}", pace_analysis.normalized_graded_pace, unit);
+
+    println!("\n{}", "⏱️ PACE DISTRIBUTION".green().bold());
+    println!("====================");
+    println!("Splits: {} segments", pace_analysis.splits.len());
+    if let Some(ef) = pace_analysis.efficiency_factor {
+        println!("Efficiency Factor:     {:>8.3}", ef);
+    }
+
+    println!("\n💡 RUNNING INSIGHTS");
+    println!("==================");
+    let difference = pace_analysis.grade_adjusted_pace - pace_analysis.avg_pace;
+    if difference > rust_decimal::Decimal::from_f64(0.1).unwrap() {
+        println!("{}", "⛰️ Significant uphill running detected".yellow());
+    } else if difference < rust_decimal::Decimal::from_f64(-0.1).unwrap() {
+        println!("{}", "⬇️ Significant downhill running detected".cyan());
+    } else {
+        println!("{}", "➡️ Relatively flat running terrain".green());
+    }
+}
+
+/// Display elevation analysis results
+fn display_elevation_analysis(elevation_analysis: &crate::running::ElevationAnalysis) {
+    use colored::Colorize;
+
+    println!("\n⛰️ ELEVATION ANALYSIS");
+    println!("=====================\n");
+
+    println!("{}", "📏 ELEVATION METRICS".blue().bold());
+    println!("====================");
+    println!("Total Gain:        {:>8} m", elevation_analysis.total_gain);
+    println!("Total Loss:        {:>8} m", elevation_analysis.total_loss);
+    println!("Average Gradient:  {:>8.2}%", elevation_analysis.avg_gradient);
+    println!("Max Gradient:      {:>8.2}%", elevation_analysis.max_gradient);
+
+    println!("\n{}", "🚀 VAM ANALYSIS".yellow().bold());
+    println!("===============");
+    println!("VAM (m/hour):      {:>8.0}", elevation_analysis.vam);
+
+    println!("\n{}", "💪 TRAINING IMPACT".green().bold());
+    println!("==================");
+    println!("Gradient Stress:   {:>8.3}", elevation_analysis.gradient_adjusted_stress);
+
+    // Elevation insights
+    println!("\n💡 ELEVATION INSIGHTS");
+    println!("====================");
+
+    if elevation_analysis.total_gain > 500 {
+        println!("{}", "🏔️ Significant climbing workout".green());
+    } else if elevation_analysis.total_gain < 100 {
+        println!("{}", "🏃 Relatively flat terrain".blue());
+    } else {
+        println!("{}", "🏞️ Moderate elevation changes".yellow());
+    }
+
+    if elevation_analysis.vam > rust_decimal::Decimal::from(1000) {
+        println!("{}", "⚡ Excellent climbing rate".green());
+    } else if elevation_analysis.vam > rust_decimal::Decimal::from(500) {
+        println!("{}", "👍 Good climbing performance".yellow());
+    } else if elevation_analysis.vam > rust_decimal::Decimal::from(0) {
+        println!("{}", "🏃 Steady climbing effort".blue());
+    }
+}
+
+/// Display performance predictions
+fn display_performance_predictions(predictions: &crate::running::PerformancePrediction, show_all: bool, target_distance: &Option<String>) {
+    use colored::Colorize;
+
+    println!("\n🚀 PERFORMANCE PREDICTIONS");
+    println!("==========================\n");
+
+    println!("{}", "📊 CURRENT FITNESS".blue().bold());
+    println!("==================");
+    println!("VDOT:              {:>8.1}", predictions.vdot);
+
+    println!("\n{}", "🏃 RACE TIME PREDICTIONS".green().bold());
+    println!("========================");
+
+    // Display target distance first if specified
+    if let Some(target) = target_distance {
+        match target.to_lowercase().as_str() {
+            "5k" => println!("5K Target:         {:>8.2} min", predictions.race_predictions.time_5k),
+            "10k" => println!("10K Target:        {:>8.2} min", predictions.race_predictions.time_10k),
+            "half" | "21k" => println!("Half Marathon:     {:>8.2} min", predictions.race_predictions.time_half_marathon),
+            "marathon" | "42k" => println!("Marathon:          {:>8.2} min", predictions.race_predictions.time_marathon),
+            _ => println!("Unknown distance: {}", target),
+        }
+        println!();
+    }
+
+    if show_all {
+        println!("5K:                {:>8.2} min", predictions.race_predictions.time_5k);
+        println!("10K:               {:>8.2} min", predictions.race_predictions.time_10k);
+        println!("Half Marathon:     {:>8.2} min", predictions.race_predictions.time_half_marathon);
+        println!("Marathon:          {:>8.2} min", predictions.race_predictions.time_marathon);
+    }
+
+    println!("\n{}", "🎯 TRAINING PACES".yellow().bold());
+    println!("=================");
+    println!("Easy Pace:         {:>8.2} min/km", predictions.training_paces.easy_pace);
+    println!("Marathon Pace:     {:>8.2} min/km", predictions.training_paces.marathon_pace);
+    println!("Threshold Pace:    {:>8.2} min/km", predictions.training_paces.threshold_pace);
+    println!("Interval Pace:     {:>8.2} min/km", predictions.training_paces.interval_pace);
+    println!("Repetition Pace:   {:>8.2} min/km", predictions.training_paces.repetition_pace);
+
+    println!("\n💡 TRAINING INSIGHTS");
+    println!("===================");
+    if predictions.vdot > rust_decimal::Decimal::from(60) {
+        println!("{}", "🚀 Elite level performance capability".green());
+    } else if predictions.vdot > rust_decimal::Decimal::from(50) {
+        println!("{}", "🏃 Competitive recreational level".yellow());
+    } else if predictions.vdot > rust_decimal::Decimal::from(40) {
+        println!("{}", "👍 Good fitness level".blue());
+    } else {
+        println!("{}", "📈 Building aerobic fitness".cyan());
+    }
+}
+
+/// Display training zones (legacy function)
+fn display_training_zones(zones: &crate::running::TrainingPaces, unit: &str, include_hr: bool) {
+    use colored::Colorize;
+
+    println!("\n🎯 RUNNING TRAINING ZONES");
+    println!("=========================\n");
+
+    println!("{}", "🏃 PACE ZONES".blue().bold());
+    println!("=============");
+
+    println!("Easy Pace:         {:>8.2} min/{}", zones.easy_pace, unit);
+    println!("Marathon Pace:     {:>8.2} min/{}", zones.marathon_pace, unit);
+    println!("Threshold Pace:    {:>8.2} min/{}", zones.threshold_pace, unit);
+    println!("Interval Pace:     {:>8.2} min/{}", zones.interval_pace, unit);
+    println!("Repetition Pace:   {:>8.2} min/{}", zones.repetition_pace, unit);
+
+    println!("\n{}", "📖 ZONE DESCRIPTIONS".green().bold());
+    println!("====================");
+    println!("Zone 1 (Easy):      Recovery runs, base building");
+    println!("Zone 2 (Marathon):  Long runs, marathon race pace");
+    println!("Zone 3 (Threshold): Tempo runs, lactate threshold");
+    println!("Zone 4 (Interval):  VO2 max intervals, 3-8 minutes");
+    println!("Zone 5 (Repetition): Speed work, neuromuscular power");
+}
+
+/// Display running zones (for RunningZones struct)
+fn display_running_zones(zones: &crate::running::RunningZones, unit: &str, include_hr: bool) {
+    use colored::Colorize;
+
+    println!("\n🎯 RUNNING TRAINING ZONES");
+    println!("=========================\n");
+
+    println!("{}", "🏃 PACE ZONES".blue().bold());
+    println!("=============");
+
+    println!("Zone 1 (Easy):         {:>6.2} - {:>6.2} min/{}",
+             zones.zone1.max_pace, zones.zone1.min_pace, unit);
+    println!("Zone 2 (Aerobic):      {:>6.2} - {:>6.2} min/{}",
+             zones.zone2.max_pace, zones.zone2.min_pace, unit);
+    println!("Zone 3 (Tempo):        {:>6.2} - {:>6.2} min/{}",
+             zones.zone3.max_pace, zones.zone3.min_pace, unit);
+    println!("Zone 4 (Threshold):    {:>6.2} - {:>6.2} min/{}",
+             zones.zone4.max_pace, zones.zone4.min_pace, unit);
+    println!("Zone 5 (VO2max):       {:>6.2} - {:>6.2} min/{}",
+             zones.zone5.max_pace, zones.zone5.min_pace, unit);
+    println!("Zone 6 (Sprint):       {:>6.2} - {:>6.2} min/{}",
+             zones.zone6.max_pace, zones.zone6.min_pace, unit);
+
+    println!("\n{}", "📖 ZONE DESCRIPTIONS".green().bold());
+    println!("====================");
+    println!("Zone 1 (Easy):      Recovery runs, base building");
+    println!("Zone 2 (Aerobic):   Long runs, conversational pace");
+    println!("Zone 3 (Tempo):     Marathon pace, comfortably hard");
+    println!("Zone 4 (Threshold): Lactate threshold, tempo runs");
+    println!("Zone 5 (VO2max):    Intervals, 3-8 minute efforts");
+    println!("Zone 6 (Sprint):    Neuromuscular power, speed work");
+}
+
+/// Format time from seconds to MM:SS or HH:MM:SS format
+fn format_time_from_seconds(total_seconds: rust_decimal::Decimal) -> String {
+    let seconds = total_seconds.to_u32().unwrap_or(0);
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    let secs = seconds % 60;
+
+    if hours > 0 {
+        format!("{}:{:02}:{:02}", hours, minutes, secs)
+    } else {
+        format!("{}:{:02}", minutes, secs)
+    }
 }
 
 // Helper functions for power analysis displays and sample data
