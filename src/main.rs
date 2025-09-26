@@ -7,10 +7,13 @@ use rust_decimal_macros::dec;
 use std::path::PathBuf;
 use crate::models::DataPoint;
 
+mod database;
+mod data_management;
 mod export;
 mod import;
 mod models;
 mod multisport;
+mod performance;
 mod pmc;
 mod power;
 mod running;
