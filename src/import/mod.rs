@@ -6,6 +6,7 @@ use std::path::Path;
 pub mod csv;
 pub mod fit;
 pub mod gpx;
+pub mod streaming;
 pub mod tcx;
 pub mod validation;
 
@@ -162,6 +163,16 @@ impl ImportManager {
         }
 
         anyhow::bail!("No importer found for file: {}", file_path.display());
+    }
+
+    /// Check if this manager can import a given file (helper for streaming)
+    pub fn can_import_file(&self, file_path: &Path) -> bool {
+        self.importers.iter().any(|importer| importer.can_import(file_path))
+    }
+
+    /// Get reference to importers for external use
+    pub fn get_importers(&self) -> &[Box<dyn ImportFormat>] {
+        &self.importers
     }
 }
 
