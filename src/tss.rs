@@ -589,7 +589,7 @@ mod tests {
             sport: Sport::Running,
             duration_seconds: 3600, // 1 hour
             workout_type: WorkoutType::Endurance,
-            data_source: DataSource::RPE,
+            data_source: DataSource::Rpe,
             raw_data: None, // No raw data forces estimation
             summary: WorkoutSummary::default(),
             notes: None,
