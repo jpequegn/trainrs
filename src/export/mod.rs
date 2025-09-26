@@ -14,21 +14,21 @@ pub mod text;
 /// Export format types
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExportFormat {
-    CSV,
-    JSON,
+    Csv,
+    Json,
     Text,
-    HTML,
-    PDF,
+    Html,
+    Pdf,
 }
 
 impl ExportFormat {
     pub fn from_str(s: &str) -> Result<Self, ExportError> {
         match s.to_lowercase().as_str() {
-            "csv" => Ok(ExportFormat::CSV),
-            "json" => Ok(ExportFormat::JSON),
+            "csv" => Ok(ExportFormat::Csv),
+            "json" => Ok(ExportFormat::Json),
             "text" | "txt" => Ok(ExportFormat::Text),
-            "html" => Ok(ExportFormat::HTML),
-            "pdf" => Ok(ExportFormat::PDF),
+            "html" => Ok(ExportFormat::Html),
+            "pdf" => Ok(ExportFormat::Pdf),
             _ => Err(ExportError::UnsupportedFormat(s.to_string())),
         }
     }
@@ -85,7 +85,7 @@ pub struct ExportOptions {
 impl Default for ExportOptions {
     fn default() -> Self {
         ExportOptions {
-            format: ExportFormat::CSV,
+            format: ExportFormat::Csv,
             export_type: ExportType::WorkoutSummaries,
             date_range: DateRange::new(None, None),
             include_raw_data: false,
@@ -235,14 +235,14 @@ impl ExportManager {
         let filtered_workouts = options.date_range.filter_workouts(workouts);
 
         match (&options.format, &options.export_type) {
-            (ExportFormat::CSV, ExportType::WorkoutSummaries) => {
+            (ExportFormat::Csv, ExportType::WorkoutSummaries) => {
                 csv::export_workout_summaries(&filtered_workouts, output_path)
             }
-            (ExportFormat::CSV, ExportType::PmcData) => {
+            (ExportFormat::Csv, ExportType::PmcData) => {
                 let pmc_data = self.calculate_pmc_data(&filtered_workouts, &options.date_range)?;
                 csv::export_pmc_data(&pmc_data, output_path)
             }
-            (ExportFormat::JSON, ExportType::TrainingReport) => {
+            (ExportFormat::Json, ExportType::TrainingReport) => {
                 let report = self.generate_training_report(&filtered_workouts, athlete_profile, &options.date_range)?;
                 json::export_training_report(&report, output_path)
             }
@@ -605,8 +605,8 @@ mod tests {
 
     #[test]
     fn test_export_format_from_str() {
-        assert_eq!(ExportFormat::from_str("csv").unwrap(), ExportFormat::CSV);
-        assert_eq!(ExportFormat::from_str("JSON").unwrap(), ExportFormat::JSON);
+        assert_eq!(ExportFormat::from_str("csv").unwrap(), ExportFormat::Csv);
+        assert_eq!(ExportFormat::from_str("JSON").unwrap(), ExportFormat::Json);
         assert_eq!(ExportFormat::from_str("text").unwrap(), ExportFormat::Text);
         assert_eq!(ExportFormat::from_str("txt").unwrap(), ExportFormat::Text);
 

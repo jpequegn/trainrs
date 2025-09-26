@@ -33,7 +33,7 @@ pub enum DataSource {
     HeartRate,
     Power,
     Pace,
-    RPE, // Rate of Perceived Exertion
+    Rpe, // Rate of Perceived Exertion
 }
 
 /// Individual data point in time-series workout data
@@ -319,7 +319,7 @@ mod tests {
             DataSource::HeartRate,
             DataSource::Power,
             DataSource::Pace,
-            DataSource::RPE,
+            DataSource::Rpe,
         ];
 
         for source in sources {

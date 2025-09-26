@@ -18,9 +18,9 @@ pub enum ZoneError {
 /// Heart rate zone calculation methods
 pub enum HRZoneMethod {
     /// Based on Lactate Threshold Heart Rate (preferred)
-    LTHR,
+    Lthr,
     /// Based on Maximum Heart Rate (age-predicted or tested)
-    MaxHR,
+    MaxHr,
 }
 
 /// Zone calculation utilities and algorithms
@@ -33,8 +33,8 @@ impl ZoneCalculator {
         method: HRZoneMethod,
     ) -> Result<HeartRateZones> {
         match method {
-            HRZoneMethod::LTHR => Self::hr_zones_from_lthr(profile),
-            HRZoneMethod::MaxHR => Self::hr_zones_from_max_hr(profile),
+            HRZoneMethod::Lthr => Self::hr_zones_from_lthr(profile),
+            HRZoneMethod::MaxHr => Self::hr_zones_from_max_hr(profile),
         }
     }
 
@@ -153,9 +153,9 @@ impl ZoneCalculator {
     /// Calculate all training zones for an athlete
     pub fn calculate_all_zones(profile: &AthleteProfile) -> TrainingZones {
         let heart_rate_zones = if profile.lthr.is_some() {
-            Self::calculate_heart_rate_zones(profile, HRZoneMethod::LTHR).ok()
+            Self::calculate_heart_rate_zones(profile, HRZoneMethod::Lthr).ok()
         } else if profile.max_hr.is_some() {
-            Self::calculate_heart_rate_zones(profile, HRZoneMethod::MaxHR).ok()
+            Self::calculate_heart_rate_zones(profile, HRZoneMethod::MaxHr).ok()
         } else {
             None
         };
@@ -843,8 +843,6 @@ mod tests {
 
     #[test]
     fn test_zone_analysis_with_different_sports() {
-        use crate::models::Sport;
-
         // This test would verify that zone analysis works correctly
         // when filtering by different sports (when integrated with workout data)
         let profile = create_test_profile();
@@ -923,7 +921,7 @@ mod tests {
         let profile = create_test_profile();
 
         // Test all zone types can be calculated
-        let hr_zones_result = ZoneCalculator::calculate_heart_rate_zones(&profile, HRZoneMethod::LTHR);
+        let hr_zones_result = ZoneCalculator::calculate_heart_rate_zones(&profile, HRZoneMethod::Lthr);
         let power_zones_result = ZoneCalculator::calculate_power_zones(&profile);
         let pace_zones_result = ZoneCalculator::calculate_pace_zones(&profile);
 

@@ -5,7 +5,6 @@ use colored::*;
 use rust_decimal::{prelude::{FromPrimitive, ToPrimitive}, Decimal};
 use rust_decimal_macros::dec;
 use std::path::PathBuf;
-use std::collections::HashMap;
 use crate::models::DataPoint;
 
 mod export;
@@ -1815,9 +1814,7 @@ fn handle_zone_analysis(
     show_recommendations: bool,
     min_duration: Option<u32>,
 ) {
-    use crate::export::DateRange;
-    use crate::models::{Workout, Sport, AthleteProfile};
-    use crate::zones::{ZoneAnalyzer, ZoneCalculator};
+    use crate::models::Workout;
 
     println!("{}", "🎯 Analyzing zone distributions...".cyan().bold());
 
@@ -2150,8 +2147,8 @@ fn handle_running_commands(command: &RunningCommands, cli: &Cli) -> Result<()> {
             files,
             race_time,
             race_distance,
-            predict_all,
-            target_distance,
+            predict_all: _,
+            target_distance: _,
             athlete,
         } => {
             println!("{}", "🚀 Analyzing performance predictions...".blue().bold());
@@ -2323,10 +2320,9 @@ fn handle_running_commands(command: &RunningCommands, cli: &Cli) -> Result<()> {
 }
 
 /// Handle multi-sport training analysis commands
-fn handle_multisport_commands(command: &multisport::MultiSportCommands, cli: &Cli) -> Result<()> {
+fn handle_multisport_commands(command: &multisport::MultiSportCommands, _cli: &Cli) -> Result<()> {
     use crate::multisport;
     use colored::Colorize;
-    use crate::import::ImportManager;
 
     println!("{}", "Multi-sport Training Analysis".cyan().bold());
 
@@ -2839,33 +2835,9 @@ fn display_performance_predictions(predictions: &crate::running::PerformancePred
     }
 }
 
-/// Display training zones (legacy function)
-fn display_training_zones(zones: &crate::running::TrainingPaces, unit: &str, include_hr: bool) {
-    use colored::Colorize;
-
-    println!("\n🎯 RUNNING TRAINING ZONES");
-    println!("=========================\n");
-
-    println!("{}", "🏃 PACE ZONES".blue().bold());
-    println!("=============");
-
-    println!("Easy Pace:         {:>8.2} min/{}", zones.easy_pace, unit);
-    println!("Marathon Pace:     {:>8.2} min/{}", zones.marathon_pace, unit);
-    println!("Threshold Pace:    {:>8.2} min/{}", zones.threshold_pace, unit);
-    println!("Interval Pace:     {:>8.2} min/{}", zones.interval_pace, unit);
-    println!("Repetition Pace:   {:>8.2} min/{}", zones.repetition_pace, unit);
-
-    println!("\n{}", "📖 ZONE DESCRIPTIONS".green().bold());
-    println!("====================");
-    println!("Zone 1 (Easy):      Recovery runs, base building");
-    println!("Zone 2 (Marathon):  Long runs, marathon race pace");
-    println!("Zone 3 (Threshold): Tempo runs, lactate threshold");
-    println!("Zone 4 (Interval):  VO2 max intervals, 3-8 minutes");
-    println!("Zone 5 (Repetition): Speed work, neuromuscular power");
-}
 
 /// Display running zones (for RunningZones struct)
-fn display_running_zones(zones: &crate::running::RunningZones, unit: &str, include_hr: bool) {
+fn display_running_zones(zones: &crate::running::RunningZones, unit: &str, _include_hr: bool) {
     use colored::Colorize;
 
     println!("\n🎯 RUNNING TRAINING ZONES");
@@ -2993,7 +2965,7 @@ fn analyze_heart_rate_zones(workouts: &[&crate::models::Workout], athlete_profil
     println!("===========================");
 
     // Calculate heart rate zones from athlete profile
-    let hr_zones = match ZoneCalculator::calculate_heart_rate_zones(athlete_profile, HRZoneMethod::LTHR) {
+    let hr_zones = match ZoneCalculator::calculate_heart_rate_zones(athlete_profile, HRZoneMethod::Lthr) {
         Ok(zones) => zones,
         Err(e) => {
             println!("{}", format!("❌ Could not calculate HR zones: {}", e).red());

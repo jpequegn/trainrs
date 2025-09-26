@@ -195,7 +195,7 @@ pub fn calculate_combined_load(
 /// Calculate sport-specific CTL/ATL tracking
 pub fn calculate_sport_specific_pmc(
     workouts: &[Workout],
-    athlete: &AthleteProfile,
+    _athlete: &AthleteProfile,
     sport: Sport,
     from_date: NaiveDate,
     to_date: NaiveDate,
