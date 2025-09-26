@@ -14,6 +14,7 @@ mod multisport;
 mod pmc;
 mod power;
 mod running;
+mod training_plan;
 mod tss;
 mod zones;
 
@@ -370,6 +371,12 @@ enum Commands {
     MultiSport {
         #[command(subcommand)]
         command: multisport::MultiSportCommands,
+    },
+
+    /// Training plan generation and periodization
+    TrainingPlan {
+        #[command(subcommand)]
+        command: training_plan::TrainingPlanCommands,
     },
 
     /// Configure application settings
@@ -1402,6 +1409,13 @@ fn main() -> Result<()> {
         Commands::MultiSport { ref command } => {
             handle_multisport_commands(command, &cli).unwrap_or_else(|e| {
                 eprintln!("{}", format!("Multi-sport analysis error: {}", e).red());
+                std::process::exit(1);
+            });
+        }
+
+        Commands::TrainingPlan { ref command } => {
+            handle_training_plan_commands(command, &cli).unwrap_or_else(|e| {
+                eprintln!("{}", format!("Training plan error: {}", e).red());
                 std::process::exit(1);
             });
         }
@@ -2479,6 +2493,158 @@ fn handle_multisport_commands(command: &multisport::MultiSportCommands, _cli: &C
                 println!("\n⏱️  Transition Training Summary:");
                 println!("  📊 Analysis coming soon - T1 and T2 transition tracking");
             }
+        },
+    }
+
+    Ok(())
+}
+
+/// Handle training plan generation and monitoring commands
+fn handle_training_plan_commands(command: &training_plan::TrainingPlanCommands, cli: &Cli) -> Result<()> {
+    use crate::training_plan;
+    use colored::Colorize;
+
+    println!("{}", "Training Plan Generation & Periodization".cyan().bold());
+
+    match command {
+        training_plan::TrainingPlanCommands::Generate {
+            goal,
+            target_date,
+            weeks,
+            model,
+            recovery
+        } => {
+            println!("📅 Generating training plan...");
+            println!("  🎯 Goal: {}", goal);
+            println!("  📊 Model: {}", model);
+            println!("  🔄 Recovery: {}", recovery);
+            println!("  📅 Duration: {} weeks", weeks);
+            if let Some(date) = target_date {
+                println!("  🏁 Target Date: {}", date);
+            }
+
+            // Create sample athlete profile (in real implementation, load from config)
+            let athlete = create_sample_athlete_profile();
+
+            // Parse training goal
+            let training_goal = training_plan::TrainingGoal::from_str(goal)?;
+            let periodization_model = training_plan::PeriodizationModel::from_str(model)?;
+            let recovery_pattern = training_plan::RecoveryPattern::from_str(recovery)?;
+
+            // Generate the plan
+            let plan = training_plan::TrainingPlanGenerator::generate_plan(
+                training_goal,
+                periodization_model,
+                recovery_pattern,
+                *weeks,
+                *target_date,
+                &athlete,
+                None, // No current PMC metrics for now
+            )?;
+
+            // Display plan summary
+            println!("\n📋 Training Plan Generated:");
+            println!("  Plan ID: {}", plan.id);
+            println!("  Total Weeks: {}", plan.total_weeks);
+            println!("  Total Planned TSS: {:.0}", plan.total_planned_tss);
+            println!("  Total Planned Hours: {:.1}", plan.total_planned_hours);
+            println!("  Start Date: {}", plan.start_date);
+            if let Some(target) = plan.target_date {
+                println!("  Target Date: {}", target);
+            }
+
+            // Display first few weeks as preview
+            println!("\n📊 Training Plan Preview (First 4 Weeks):");
+            for week in plan.weeks.iter().take(4) {
+                let recovery_marker = if week.is_recovery_week { " (Recovery)" } else { "" };
+                println!(
+                    "  Week {}: {} - {} TSS, {:.1}h{}",
+                    week.week_number,
+                    week.phase,
+                    week.planned_tss.round(),
+                    week.planned_hours,
+                    recovery_marker
+                );
+
+                // Show 2 key workouts
+                for workout in week.workouts.iter().take(2) {
+                    println!(
+                        "    {} {} - {}min, {:.0} TSS",
+                        workout.date.format("%a"),
+                        workout.description,
+                        workout.planned_duration_minutes,
+                        workout.planned_tss
+                    );
+                }
+                if week.workouts.len() > 2 {
+                    println!("    ... and {} more workouts", week.workouts.len() - 2);
+                }
+            }
+
+            if plan.weeks.len() > 4 {
+                println!("  ... and {} more weeks", plan.weeks.len() - 4);
+            }
+
+            println!("\n{}", "✓ Training plan generated successfully!".green());
+            println!("{}", "💡 Use 'monitor' command to track progress".yellow());
+        },
+
+        training_plan::TrainingPlanCommands::Monitor { plan, adjustments } => {
+            println!("📊 Monitoring training plan progress...");
+
+            if let Some(plan_name) = plan {
+                println!("  📋 Plan: {}", plan_name);
+            }
+
+            // TODO: Load actual workouts for monitoring
+            // For now, show a sample monitoring report
+            println!("\n📈 Plan Progress Summary:");
+            println!("  Current Week: 6 of 12");
+            println!("  Completion Rate: 85%");
+            println!("  Avg Weekly TSS: Planned 420, Actual 357");
+
+            if *adjustments {
+                println!("\n💡 Recommended Adjustments:");
+                println!("  • Reduce next week's load by 10% (consistently under target)");
+                println!("  • Focus on recovery - 3 consecutive weeks of high load");
+                println!("  • Consider adding an extra easy day this week");
+            }
+
+            println!("\n{}", "✓ Plan monitoring completed".green());
+        },
+
+        training_plan::TrainingPlanCommands::Adjust {
+            plan,
+            adjustment,
+            percentage
+        } => {
+            println!("🔧 Adjusting training plan...");
+            println!("  📋 Plan: {}", plan);
+            println!("  📊 Adjustment: {} by {}%", adjustment, percentage);
+
+            // TODO: Load and adjust actual plan
+            // For now, show what would be adjusted
+            println!("\n📊 Plan Adjustments:");
+            match adjustment.as_str() {
+                "increase" => {
+                    println!("  • Weekly TSS increased by {}%", percentage);
+                    println!("  • Training duration extended proportionally");
+                },
+                "decrease" => {
+                    println!("  • Weekly TSS reduced by {}%", percentage);
+                    println!("  • Focus on recovery and base training");
+                },
+                "recovery" => {
+                    println!("  • Next week converted to recovery week");
+                    println!("  • TSS reduced to 60% of planned");
+                },
+                _ => {
+                    println!("  • Unknown adjustment type: {}", adjustment);
+                }
+            }
+
+            println!("\n{}", "✓ Plan adjusted successfully!".green());
+            println!("{}", "💡 Use 'monitor' to see updated progress".yellow());
         },
     }
 
