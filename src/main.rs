@@ -7,6 +7,7 @@ use rust_decimal_macros::dec;
 use std::path::PathBuf;
 use crate::models::DataPoint;
 
+mod config;
 mod database;
 mod data_management;
 mod export;
@@ -395,6 +396,219 @@ enum Commands {
         /// Get a configuration value
         #[arg(short, long)]
         get: Option<String>,
+    },
+
+    /// Manage athlete profiles and settings
+    Athlete {
+        #[command(subcommand)]
+        command: AthleteCommands,
+    },
+}
+
+/// Athlete management subcommands
+#[derive(Subcommand)]
+enum AthleteCommands {
+    /// Create a new athlete profile
+    Create {
+        /// Athlete name or identifier
+        #[arg(short, long)]
+        name: String,
+
+        /// Display name for the athlete
+        #[arg(long)]
+        display_name: Option<String>,
+
+        /// Primary sport (cycling, running, swimming, triathlon)
+        #[arg(short, long)]
+        sport: Option<String>,
+
+        /// Functional Threshold Power (watts)
+        #[arg(long)]
+        ftp: Option<u16>,
+
+        /// Lactate Threshold Heart Rate (bpm)
+        #[arg(long)]
+        lthr: Option<u16>,
+
+        /// Threshold pace (min/km for running)
+        #[arg(long)]
+        threshold_pace: Option<f64>,
+
+        /// Maximum heart rate (bpm)
+        #[arg(long)]
+        max_hr: Option<u16>,
+
+        /// Resting heart rate (bpm)
+        #[arg(long)]
+        resting_hr: Option<u16>,
+
+        /// Weight in kilograms
+        #[arg(long)]
+        weight: Option<f64>,
+
+        /// Set as default athlete
+        #[arg(long)]
+        set_default: bool,
+    },
+
+    /// List all athlete profiles
+    List {
+        /// Show detailed information
+        #[arg(short, long)]
+        detailed: bool,
+
+        /// Show historical threshold data
+        #[arg(long)]
+        show_history: bool,
+    },
+
+    /// Switch to a different athlete profile
+    Switch {
+        /// Athlete name or ID to switch to
+        #[arg(short, long)]
+        name: String,
+    },
+
+    /// Show athlete profile details
+    Show {
+        /// Athlete name or ID (defaults to current)
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Show historical threshold changes
+        #[arg(long)]
+        show_history: bool,
+
+        /// Show sport-specific profiles
+        #[arg(long)]
+        show_sports: bool,
+    },
+
+    /// Update athlete profile information
+    Set {
+        /// Athlete name or ID to update (defaults to current)
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Update display name
+        #[arg(long)]
+        display_name: Option<String>,
+
+        /// Update primary sport
+        #[arg(long)]
+        sport: Option<String>,
+
+        /// Update Functional Threshold Power (watts)
+        #[arg(long)]
+        ftp: Option<u16>,
+
+        /// Update Lactate Threshold Heart Rate (bpm)
+        #[arg(long)]
+        lthr: Option<u16>,
+
+        /// Update threshold pace (min/km for running)
+        #[arg(long)]
+        threshold_pace: Option<f64>,
+
+        /// Update maximum heart rate (bpm)
+        #[arg(long)]
+        max_hr: Option<u16>,
+
+        /// Update resting heart rate (bpm)
+        #[arg(long)]
+        resting_hr: Option<u16>,
+
+        /// Update weight in kilograms
+        #[arg(long)]
+        weight: Option<f64>,
+
+        /// Add a reason for threshold changes
+        #[arg(long)]
+        reason: Option<String>,
+    },
+
+    /// Delete an athlete profile
+    Delete {
+        /// Athlete name or ID to delete
+        #[arg(short, long)]
+        name: String,
+
+        /// Skip confirmation prompt
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Add sport-specific profile for an athlete
+    AddSport {
+        /// Athlete name or ID (defaults to current)
+        #[arg(long)]
+        athlete: Option<String>,
+
+        /// Sport to add profile for
+        #[arg(short, long)]
+        sport: String,
+
+        /// Functional Threshold Power for this sport (watts)
+        #[arg(long)]
+        ftp: Option<u16>,
+
+        /// Lactate Threshold Heart Rate for this sport (bpm)
+        #[arg(long)]
+        lthr: Option<u16>,
+
+        /// Threshold pace for this sport (min/km)
+        #[arg(long)]
+        threshold_pace: Option<f64>,
+
+        /// Maximum heart rate for this sport (bpm)
+        #[arg(long)]
+        max_hr: Option<u16>,
+
+        /// Zone calculation method for this sport
+        #[arg(long)]
+        zone_method: Option<String>,
+    },
+
+    /// Import athlete data from external source
+    Import {
+        /// Import file path (JSON, CSV, or TrainingPeaks export)
+        #[arg(short, long)]
+        file: PathBuf,
+
+        /// Import format (auto-detect if not specified)
+        #[arg(long)]
+        format: Option<String>,
+
+        /// Merge with existing athlete (if name matches)
+        #[arg(long)]
+        merge: bool,
+
+        /// Override existing values on merge
+        #[arg(long)]
+        overwrite: bool,
+    },
+
+    /// Export athlete data
+    Export {
+        /// Output file path
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Athlete name or ID (defaults to current)
+        #[arg(long)]
+        athlete: Option<String>,
+
+        /// Export format (json, csv)
+        #[arg(short = 'f', long, default_value = "json")]
+        format: String,
+
+        /// Include historical threshold data
+        #[arg(long)]
+        include_history: bool,
+
+        /// Include all sport profiles
+        #[arg(long)]
+        include_sports: bool,
     },
 }
 
@@ -1424,18 +1638,16 @@ fn main() -> Result<()> {
         }
 
         Commands::Config { list, set, get } => {
-            println!("{}", "Managing configuration...".white().bold());
-            if list {
-                println!("Listing all configuration options:");
-                // TODO: Implement config listing
-            } else if let Some(key_value) = set {
-                println!("Setting: {}", key_value);
-                // TODO: Implement config setting
-            } else if let Some(key) = get {
-                println!("Getting: {}", key);
-                // TODO: Implement config getting
-            }
-            println!("{}", "✓ Configuration updated".white());
+            handle_config_commands(list, set, get).unwrap_or_else(|e| {
+                eprintln!("{}", format!("Configuration error: {}", e).red());
+                std::process::exit(1);
+            });
+        }
+        Commands::Athlete { command } => {
+            handle_athlete_commands(command).unwrap_or_else(|e| {
+                eprintln!("{}", format!("Athlete management error: {}", e).red());
+                std::process::exit(1);
+            });
         }
     }
 
@@ -4024,4 +4236,1075 @@ fn display_power_balance(balance: &crate::power::PowerBalance) {
         println!("• Continue current training approach");
         println!("• Monitor trends over time");
     }
+}
+
+/// Handle configuration commands
+fn handle_config_commands(list: bool, set: Option<String>, get: Option<String>) -> Result<()> {
+    use crate::config::{AppConfig, AthleteConfig};
+    use colored::Colorize;
+
+    println!("{}", "⚙️ Configuration Management".cyan().bold());
+    println!("==============================");
+
+    let mut config = AppConfig::load_or_default();
+
+    if list {
+        display_config_list(&config)?;
+    } else if let Some(key_value) = set {
+        handle_config_set(&mut config, &key_value)?;
+    } else if let Some(key) = get {
+        handle_config_get(&config, &key)?;
+    } else {
+        // Interactive config management
+        display_config_status(&config)?;
+    }
+
+    Ok(())
+}
+
+/// Display all configuration options
+fn display_config_list(config: &crate::config::AppConfig) -> Result<()> {
+    use colored::Colorize;
+
+    println!("{}", "📋 Configuration Overview".white().bold());
+    println!("{}", "═".repeat(50));
+
+    // Application Settings
+    println!("\n{}", "🔧 Application Settings:".blue().bold());
+    println!("  Config Path:     {}", crate::config::AppConfig::default_config_path().display());
+    println!("  Data Directory:  {}", config.settings.data_dir.display());
+    println!("  Default Units:   {:?}", config.settings.default_units);
+    println!("  Version:         {}", config.metadata.version);
+
+    // PMC Settings
+    println!("\n{}", "📊 PMC Configuration:".green().bold());
+    println!("  CTL Period:      {} days", config.pmc.ctl_time_constant);
+    println!("  ATL Period:      {} days", config.pmc.atl_time_constant);
+    println!("  Min Data Days:   {} days", config.pmc.min_data_days);
+
+    // Zone Settings
+    println!("\n{}", "🎯 Zone Configuration:".yellow().bold());
+    println!("  HR Zone Method:    {:?}", config.zones.hr_zone_method);
+    println!("  Power Zone Method: {:?}", config.zones.power_zone_method);
+    println!("  Pace Zone Method:  {:?}", config.zones.pace_zone_method);
+
+    // Import Settings
+    println!("\n{}", "📥 Import Settings:".magenta().bold());
+    println!("  Auto-calc TSS:     {}", config.import.auto_calculate_tss);
+    println!("  Chunk Size:        {}", config.import.chunk_size);
+    println!("  Supported Formats: {:?}", config.import.supported_formats);
+
+    // Backup Settings
+    println!("\n{}", "💾 Backup Configuration:".cyan().bold());
+    println!("  Enabled:           {}", config.settings.auto_backup.enabled);
+    println!("  Backup Directory:  {}", config.settings.auto_backup.backup_dir.display());
+    println!("  Retention:         {} days", config.settings.auto_backup.retention_days);
+
+    // Athletes
+    println!("\n{}", "👤 Athletes:".bright_blue().bold());
+    if config.athletes.is_empty() {
+        println!("  {}", "No athletes configured".yellow());
+    } else {
+        for (id, athlete) in &config.athletes {
+            let active_marker = if Some(id) == config.default_athlete_id.as_ref() { "🟢" } else { "⚪" };
+            println!("  {} {} ({})", active_marker, athlete.profile.name, id);
+            println!("      Data Dir: {}", athlete.data_dir.display());
+            println!("      Sports:   {}",
+                if athlete.sport_profiles.is_empty() {
+                    "None configured".to_string()
+                } else {
+                    athlete.sport_profiles.keys().map(|s| format!("{:?}", s)).collect::<Vec<_>>().join(", ")
+                }
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle setting configuration values
+fn handle_config_set(config: &mut crate::config::AppConfig, key_value: &str) -> Result<()> {
+    use colored::Colorize;
+
+    let parts: Vec<&str> = key_value.splitn(2, '=').collect();
+    if parts.len() != 2 {
+        return Err(anyhow::anyhow!("Invalid format. Use: key=value"));
+    }
+
+    let key = parts[0].trim();
+    let value = parts[1].trim();
+
+    println!("Setting configuration: {} = {}", key.cyan(), value.yellow());
+
+    match key {
+        "pmc.ctl_period" => {
+            let days: u16 = value.parse()?;
+            config.pmc.ctl_time_constant = days;
+            println!("{}", "✅ CTL time constant updated".green());
+        }
+        "pmc.atl_period" => {
+            let days: u16 = value.parse()?;
+            config.pmc.atl_time_constant = days;
+            println!("{}", "✅ ATL time constant updated".green());
+        }
+        "import.chunk_size" => {
+            let size: usize = value.parse()?;
+            config.import.chunk_size = size;
+            println!("{}", "✅ Import chunk size updated".green());
+        }
+        "import.auto_tss" => {
+            let enabled: bool = value.parse()?;
+            config.import.auto_calculate_tss = enabled;
+            println!("{}", "✅ Auto TSS calculation setting updated".green());
+        }
+        "backup.enabled" => {
+            let enabled: bool = value.parse()?;
+            config.settings.auto_backup.enabled = enabled;
+            println!("{}", "✅ Backup enabled setting updated".green());
+        }
+        "backup.retention_days" => {
+            let days: u16 = value.parse()?;
+            config.settings.auto_backup.retention_days = days;
+            println!("{}", "✅ Backup retention updated".green());
+        }
+        "default_athlete" => {
+            if config.athletes.contains_key(value) {
+                config.set_default_athlete(value)?;
+                println!("{}", "✅ Default athlete updated".green());
+            } else {
+                return Err(anyhow::anyhow!("Athlete not found: {}", value));
+            }
+        }
+        _ => {
+            return Err(anyhow::anyhow!("Unknown configuration key: {}", key));
+        }
+    }
+
+    // Save configuration
+    config.save_default()?;
+    println!("{}", "💾 Configuration saved".blue());
+
+    Ok(())
+}
+
+/// Handle getting configuration values
+fn handle_config_get(config: &crate::config::AppConfig, key: &str) -> Result<()> {
+    use colored::Colorize;
+
+    match key {
+        "pmc.ctl_period" => println!("{}", config.pmc.ctl_time_constant.to_string().yellow()),
+        "pmc.atl_period" => println!("{}", config.pmc.atl_time_constant.to_string().yellow()),
+        "import.chunk_size" => println!("{}", config.import.chunk_size.to_string().yellow()),
+        "import.auto_tss" => println!("{}", config.import.auto_calculate_tss.to_string().yellow()),
+        "backup.enabled" => println!("{}", config.settings.auto_backup.enabled.to_string().yellow()),
+        "backup.retention_days" => println!("{}", config.settings.auto_backup.retention_days.to_string().yellow()),
+        "default_athlete" => {
+            match &config.default_athlete_id {
+                Some(id) => {
+                    if let Some(athlete) = config.get_athlete(id) {
+                        println!("{} ({})", athlete.profile.name.yellow(), id.dimmed());
+                    } else {
+                        println!("{}", id.yellow());
+                    }
+                }
+                None => println!("{}", "No default athlete set".red()),
+            }
+        }
+        "config_path" => println!("{}", crate::config::AppConfig::default_config_path().display().to_string().yellow()),
+        _ => {
+            return Err(anyhow::anyhow!("Unknown configuration key: {}", key));
+        }
+    }
+
+    Ok(())
+}
+
+/// Display current configuration status
+fn display_config_status(config: &crate::config::AppConfig) -> Result<()> {
+    use colored::Colorize;
+
+    println!("{}", "📈 Configuration Status".white().bold());
+    println!("{}", "═".repeat(30));
+
+    // Quick status overview
+    let config_path = crate::config::AppConfig::default_config_path();
+    let config_exists = config_path.exists();
+
+    println!("Config File: {} {}",
+        config_path.display(),
+        if config_exists { "✅".green() } else { "❌ (using defaults)".red() }
+    );
+
+    println!("Athletes:    {} configured", config.athletes.len().to_string().cyan());
+
+    if let Some(default_id) = &config.default_athlete_id {
+        if let Some(athlete) = config.get_athlete(default_id) {
+            println!("Default:     {} ({})", athlete.profile.name.yellow(), default_id.dimmed());
+        }
+    } else {
+        println!("Default:     {}", "No athlete selected".red());
+    }
+
+    println!("\n{}", "💡 Available Commands:".blue());
+    println!("  trainrs config --list                    # Show all settings");
+    println!("  trainrs config --get <key>               # Get specific setting");
+    println!("  trainrs config --set <key>=<value>       # Set specific setting");
+
+    if config.athletes.is_empty() {
+        println!("\n{}", "🚀 Quick Start:".green().bold());
+        println!("  Create your first athlete profile:");
+        println!("  trainrs athlete create \"Your Name\"");
+    }
+
+    Ok(())
+}
+
+/// Handle athlete management commands
+fn handle_athlete_commands(command: AthleteCommands) -> Result<()> {
+    use crate::config::{AppConfig, AthleteConfig, SportProfile, ThresholdChange};
+    use colored::Colorize;
+
+    println!("{}", "👤 Athlete Management".cyan().bold());
+    println!("======================");
+
+    match command {
+        AthleteCommands::Create {
+            name,
+            display_name,
+            sport,
+            ftp,
+            lthr,
+            threshold_pace,
+            max_hr,
+            resting_hr,
+            weight,
+            set_default,
+        } => {
+            handle_athlete_create(
+                name,
+                display_name,
+                sport,
+                ftp,
+                lthr,
+                threshold_pace,
+                max_hr,
+                resting_hr,
+                weight,
+                set_default,
+            )
+        }
+        AthleteCommands::List { detailed, show_history } => {
+            handle_athlete_list(detailed, show_history)
+        }
+        AthleteCommands::Switch { name } => {
+            handle_athlete_switch(name)
+        }
+        AthleteCommands::Show { name, show_history, show_sports } => {
+            handle_athlete_show(name, show_history, show_sports)
+        }
+        AthleteCommands::Set {
+            name,
+            display_name,
+            sport,
+            ftp,
+            lthr,
+            threshold_pace,
+            max_hr,
+            resting_hr,
+            weight,
+            reason,
+        } => {
+            handle_athlete_set(
+                name,
+                display_name,
+                sport,
+                ftp,
+                lthr,
+                threshold_pace,
+                max_hr,
+                resting_hr,
+                weight,
+                reason,
+            )
+        }
+        AthleteCommands::Delete { name, force } => {
+            handle_athlete_delete(name, force)
+        }
+        AthleteCommands::AddSport {
+            athlete,
+            sport,
+            ftp,
+            lthr,
+            threshold_pace,
+            max_hr,
+            zone_method,
+        } => {
+            handle_athlete_add_sport(athlete, sport, ftp, lthr, threshold_pace, max_hr, zone_method)
+        }
+        AthleteCommands::Import { file, format, merge, overwrite } => {
+            handle_athlete_import(file, format, merge, overwrite)
+        }
+        AthleteCommands::Export {
+            output,
+            athlete,
+            format,
+            include_history,
+            include_sports,
+        } => {
+            handle_athlete_export(output, athlete, format, include_history, include_sports)
+        }
+    }
+}
+
+/// Create a new athlete profile
+fn handle_athlete_create(
+    name: String,
+    display_name: Option<String>,
+    sport: Option<String>,
+    ftp: Option<u16>,
+    lthr: Option<u16>,
+    threshold_pace: Option<f64>,
+    max_hr: Option<u16>,
+    resting_hr: Option<u16>,
+    weight: Option<f64>,
+    set_default: bool,
+) -> Result<()> {
+    use crate::config::{AppConfig, AthleteConfig, AthleteProfile};
+    use crate::models::Sport;
+    use colored::Colorize;
+
+    let mut config = AppConfig::load_or_default();
+
+    // Check if athlete already exists
+    if config.athletes.contains_key(&name) {
+        return Err(anyhow::anyhow!("Athlete '{}' already exists", name));
+    }
+
+    // Parse sport
+    let primary_sport = if let Some(sport_str) = sport {
+        match sport_str.to_lowercase().as_str() {
+            "cycling" => Sport::Cycling,
+            "running" => Sport::Running,
+            "swimming" => Sport::Swimming,
+            "triathlon" => Sport::Triathlon,
+            _ => return Err(anyhow::anyhow!("Unknown sport: {}", sport_str)),
+        }
+    } else {
+        Sport::Cycling // Default sport
+    };
+
+    // Create athlete profile
+    let profile = AthleteProfile {
+        id: name.clone(),
+        name: display_name.unwrap_or_else(|| name.clone()),
+        date_of_birth: None,
+        weight: weight.map(rust_decimal::Decimal::try_from).transpose()?,
+        height: None,
+        preferred_units: crate::models::Units::Metric,
+        max_hr,
+        resting_hr,
+        ftp,
+        lthr,
+        threshold_pace: threshold_pace.map(rust_decimal::Decimal::try_from).transpose()?,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        active: true,
+    };
+
+    // Create athlete configuration
+    let athlete_config = AthleteConfig {
+        id: name.clone(),
+        profile: profile.clone(),
+        primary_sport: primary_sport.clone(),
+        sport_profiles: std::collections::HashMap::new(),
+        threshold_history: Vec::new(),
+        created_date: chrono::Utc::now(),
+        last_updated: chrono::Utc::now(),
+        data_directory: config.settings.data_dir.join(&name),
+        data_dir: config.settings.data_dir.join(&name),
+    };
+
+    // Add athlete to config
+    config.athletes.insert(name.clone(), athlete_config);
+
+    // Set as default if requested or if it's the first athlete
+    if set_default || config.default_athlete_id.is_none() {
+        config.default_athlete_id = Some(name.clone());
+    }
+
+    // Save configuration
+    config.save()?;
+
+    // Create data directory for athlete
+    std::fs::create_dir_all(&config.settings.data_dir.join(&name))?;
+
+    println!("{} {} created successfully!", "✅".green(), "Athlete".green().bold());
+    println!("Name:         {}", profile.name.yellow());
+    println!("ID:           {}", name.dimmed());
+    println!("Primary Sport: {}", format!("{:?}", primary_sport).cyan());
+
+    if let Some(ftp) = ftp {
+        println!("FTP:          {} watts", ftp.to_string().green());
+    }
+    if let Some(lthr) = lthr {
+        println!("LTHR:         {} bpm", lthr.to_string().red());
+    }
+    if let Some(pace) = threshold_pace {
+        println!("Threshold Pace: {:.2} min/km", pace.to_string().blue());
+    }
+
+    if set_default || config.athletes.len() == 1 {
+        println!("Status:       {} (default)", "Active".green().bold());
+    }
+
+    println!("\n{}", "💡 Next Steps:".blue());
+    println!("• Set training thresholds: trainrs athlete set --ftp <value> --lthr <value>");
+    println!("• Import workout data: trainrs import --file <path>");
+    println!("• Configure zones: trainrs zones list");
+
+    Ok(())
+}
+
+/// List all athlete profiles
+fn handle_athlete_list(detailed: bool, show_history: bool) -> Result<()> {
+    use crate::config::AppConfig;
+    use colored::Colorize;
+
+    let config = AppConfig::load_or_default();
+
+    if config.athletes.is_empty() {
+        println!("{}", "No athletes configured yet.".yellow());
+        println!("\n{}", "Create your first athlete:".blue());
+        println!("trainrs athlete create \"Your Name\"");
+        return Ok(());
+    }
+
+    println!("{}", "🏃 Athletes Overview".white().bold());
+    println!("{}", "═".repeat(50));
+
+    for (id, athlete) in &config.athletes {
+        let is_default = config.default_athlete_id.as_ref() == Some(id);
+        let status_indicator = if is_default { "🟢" } else { "⚪" };
+
+        println!("\n{} {} {}",
+            status_indicator,
+            athlete.profile.name.yellow().bold(),
+            if is_default { "(default)".green() } else { "".normal() }
+        );
+
+        if detailed {
+            println!("  ID:           {}", id.dimmed());
+            println!("  Primary Sport: {}", format!("{:?}", athlete.primary_sport).cyan());
+            println!("  Created:      {}", athlete.created_date.format("%Y-%m-%d").to_string().dimmed());
+
+            // Thresholds
+            if let Some(ftp) = athlete.profile.ftp {
+                println!("  FTP:          {} watts", ftp.to_string().green());
+            }
+            if let Some(lthr) = athlete.profile.lthr {
+                println!("  LTHR:         {} bpm", lthr.to_string().red());
+            }
+            if let Some(pace) = athlete.profile.threshold_pace {
+                println!("  Threshold Pace: {:.2} min/km", pace.to_string().blue());
+            }
+
+            // Sport profiles
+            if !athlete.sport_profiles.is_empty() {
+                println!("  Sports:       {}", athlete.sport_profiles.len().to_string().cyan());
+                for sport in athlete.sport_profiles.keys() {
+                    println!("    • {}", format!("{:?}", sport).cyan());
+                }
+            }
+
+            // History
+            if show_history && !athlete.threshold_history.is_empty() {
+                println!("  History:      {} threshold changes", athlete.threshold_history.len());
+                for change in athlete.threshold_history.iter().rev().take(3) {
+                    println!("    {} {} {} -> {}",
+                        change.date.format("%Y-%m-%d").to_string().dimmed(),
+                        change.threshold_type.to_string().cyan(),
+                        change.old_value.unwrap_or(rust_decimal::Decimal::ZERO),
+                        change.new_value.to_string().yellow()
+                    );
+                }
+            }
+        } else {
+            // Compact view
+            let mut info_parts = Vec::new();
+            if let Some(ftp) = athlete.profile.ftp {
+                info_parts.push(format!("FTP: {}W", ftp));
+            }
+            if let Some(lthr) = athlete.profile.lthr {
+                info_parts.push(format!("LTHR: {}bpm", lthr));
+            }
+            if !athlete.sport_profiles.is_empty() {
+                info_parts.push(format!("{} sports", athlete.sport_profiles.len()));
+            }
+
+            if !info_parts.is_empty() {
+                println!("  {}", info_parts.join(" • ").dimmed());
+            }
+        }
+    }
+
+    println!("\n{}", "💡 Commands:".blue());
+    println!("• Switch athlete: trainrs athlete switch <name>");
+    println!("• View details:   trainrs athlete show <name>");
+    println!("• Update athlete: trainrs athlete set <name> --ftp <value>");
+
+    Ok(())
+}
+
+/// Switch to a different athlete profile
+fn handle_athlete_switch(name: String) -> Result<()> {
+    use crate::config::AppConfig;
+    use colored::Colorize;
+
+    let mut config = AppConfig::load_or_default();
+
+    // Check if athlete exists
+    if !config.athletes.contains_key(&name) {
+        println!("{} Athlete '{}' not found.", "❌".red(), name);
+        println!("\nAvailable athletes:");
+        for (id, athlete) in &config.athletes {
+            println!("• {} ({})", athlete.profile.name.yellow(), id.dimmed());
+        }
+        return Err(anyhow::anyhow!("Athlete not found"));
+    }
+
+    // Get athlete data for display before modifying config
+    let (athlete_name, primary_sport, ftp, lthr) = {
+        let athlete = config.athletes.get(&name).unwrap();
+        (athlete.profile.name.clone(), athlete.primary_sport.clone(), athlete.profile.ftp, athlete.profile.lthr)
+    };
+
+    // Set as default
+    config.default_athlete_id = Some(name.clone());
+    config.save()?;
+
+    println!("{} Switched to athlete: {}", "✅".green(), athlete_name.yellow().bold());
+    println!("Primary Sport: {}", format!("{:?}", primary_sport).cyan());
+
+    // Show key thresholds
+    if let Some(ftp) = ftp {
+        println!("FTP:           {} watts", ftp.to_string().green());
+    }
+    if let Some(lthr) = lthr {
+        println!("LTHR:          {} bpm", lthr.to_string().red());
+    }
+
+    Ok(())
+}
+
+/// Show athlete profile details
+fn handle_athlete_show(name: Option<String>, show_history: bool, show_sports: bool) -> Result<()> {
+    use crate::config::AppConfig;
+    use colored::Colorize;
+
+    let config = AppConfig::load_or_default();
+
+    // Determine which athlete to show
+    let athlete_id = if let Some(name) = name {
+        if !config.athletes.contains_key(&name) {
+            return Err(anyhow::anyhow!("Athlete '{}' not found", name));
+        }
+        name
+    } else {
+        config.default_athlete_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("No default athlete set. Use --name to specify an athlete."))?
+    };
+
+    let athlete = config.athletes.get(&athlete_id).unwrap();
+    let is_default = config.default_athlete_id.as_ref() == Some(&athlete_id);
+
+    // Header
+    println!("{} {}", "👤".yellow(), athlete.profile.name.yellow().bold());
+    println!("{}", "═".repeat(50));
+
+    // Basic info
+    println!("ID:            {}", athlete_id.dimmed());
+    println!("Primary Sport: {}", format!("{:?}", athlete.primary_sport).cyan());
+    println!("Status:        {}", if is_default { "Default".green().bold() } else { "Available".dimmed() });
+    println!("Created:       {}", athlete.created_date.format("%Y-%m-%d %H:%M").to_string().dimmed());
+    println!("Last Updated:  {}", athlete.last_updated.format("%Y-%m-%d %H:%M").to_string().dimmed());
+
+    // Physical data
+    println!("\n{}", "📊 Physical Profile:".blue().bold());
+    if let Some(weight) = athlete.profile.weight {
+        println!("Weight:        {} kg", weight.to_string().green());
+    }
+    if let Some(max_hr) = athlete.profile.max_hr {
+        println!("Max HR:        {} bpm", max_hr.to_string().red());
+    }
+    if let Some(resting_hr) = athlete.profile.resting_hr {
+        println!("Resting HR:    {} bpm", resting_hr.to_string().blue());
+    }
+
+    // Training thresholds
+    println!("\n{}", "🎯 Training Thresholds:".green().bold());
+    if let Some(ftp) = athlete.profile.ftp {
+        println!("FTP:           {} watts", ftp.to_string().green());
+    } else {
+        println!("FTP:           {}", "Not set".red());
+    }
+
+    if let Some(lthr) = athlete.profile.lthr {
+        println!("LTHR:          {} bpm", lthr.to_string().red());
+    } else {
+        println!("LTHR:          {}", "Not set".red());
+    }
+
+    if let Some(pace) = athlete.profile.threshold_pace {
+        println!("Threshold Pace: {:.2} min/km", pace.to_string().blue());
+    } else {
+        println!("Threshold Pace: {}", "Not set".red());
+    }
+
+    // Sport profiles
+    if show_sports && !athlete.sport_profiles.is_empty() {
+        println!("\n{}", "🏃 Sport-Specific Profiles:".yellow().bold());
+        for (sport, sport_profile) in &athlete.sport_profiles {
+            println!("\n{} {}:", "•".cyan(), format!("{:?}", sport).cyan().bold());
+            if let Some(ftp) = sport_profile.ftp {
+                println!("  FTP:           {} watts", ftp.to_string().green());
+            }
+            if let Some(lthr) = sport_profile.lthr {
+                println!("  LTHR:          {} bpm", lthr.to_string().red());
+            }
+            if let Some(pace) = sport_profile.threshold_pace {
+                println!("  Threshold Pace: {:.2} min/km", pace.to_string().blue());
+            }
+            if let Some(method) = &sport_profile.zone_method {
+                println!("  Zone Method:   {}", method.cyan());
+            }
+        }
+    }
+
+    // Threshold history
+    if show_history && !athlete.threshold_history.is_empty() {
+        println!("\n{}", "📈 Threshold History:".purple().bold());
+        for change in athlete.threshold_history.iter().rev() {
+            let change_type = if change.old_value.is_some() { "Updated" } else { "Set" };
+            println!("{} {} {} {} {} -> {}",
+                change.date.format("%Y-%m-%d").to_string().dimmed(),
+                change_type.yellow(),
+                change.threshold_type.to_string().cyan(),
+                if let Some(old) = change.old_value { format!("from {}", old) } else { "".to_string() },
+                if change.old_value.is_some() { "to" } else { "" },
+                change.new_value.to_string().green()
+            );
+            if let Some(reason) = &change.notes {
+                println!("         Reason: {}", reason.dimmed());
+            }
+        }
+    }
+
+    // Data directory
+    println!("\n{}", "📁 Data:".blue().bold());
+    println!("Directory:     {}", athlete.data_directory.display().to_string().dimmed());
+    let dir_exists = athlete.data_directory.exists();
+    println!("Status:        {}", if dir_exists { "✅ Exists".green() } else { "❌ Missing".red() });
+
+    Ok(())
+}
+
+/// Update athlete profile information
+fn handle_athlete_set(
+    name: Option<String>,
+    display_name: Option<String>,
+    sport: Option<String>,
+    ftp: Option<u16>,
+    lthr: Option<u16>,
+    threshold_pace: Option<f64>,
+    max_hr: Option<u16>,
+    resting_hr: Option<u16>,
+    weight: Option<f64>,
+    reason: Option<String>,
+) -> Result<()> {
+    use crate::config::{AppConfig, ThresholdChange, ThresholdType, ThresholdSource};
+    use colored::Colorize;
+
+    let mut config = AppConfig::load_or_default();
+
+    // Determine which athlete to update
+    let athlete_id = if let Some(name) = name {
+        if !config.athletes.contains_key(&name) {
+            return Err(anyhow::anyhow!("Athlete '{}' not found", name));
+        }
+        name
+    } else {
+        config.default_athlete_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("No default athlete set. Use --name to specify an athlete."))?
+    };
+
+    let athlete = config.athletes.get_mut(&athlete_id).unwrap();
+    let mut changes_made = Vec::new();
+
+    // Update display name
+    if let Some(new_name) = display_name {
+        athlete.profile.name = new_name.clone();
+        changes_made.push(format!("Display name: {}", new_name.yellow()));
+    }
+
+    // Update primary sport
+    if let Some(sport_str) = sport {
+        let new_sport = match sport_str.to_lowercase().as_str() {
+            "cycling" => crate::models::Sport::Cycling,
+            "running" => crate::models::Sport::Running,
+            "swimming" => crate::models::Sport::Swimming,
+            "triathlon" => crate::models::Sport::Triathlon,
+            _ => return Err(anyhow::anyhow!("Unknown sport: {}", sport_str)),
+        };
+        athlete.primary_sport = new_sport.clone();
+        changes_made.push(format!("Primary sport: {}", format!("{:?}", new_sport).cyan()));
+    }
+
+    // Track threshold changes
+    let now = chrono::Utc::now();
+
+    // Update FTP
+    if let Some(new_ftp) = ftp {
+        let old_ftp = athlete.profile.ftp;
+        athlete.profile.ftp = Some(new_ftp);
+
+        let change = ThresholdChange {
+            date: now.date_naive(),
+            threshold_type: ThresholdType::Ftp,
+            old_value: old_ftp.map(|v| rust_decimal::Decimal::from(v)),
+            new_value: rust_decimal::Decimal::from(new_ftp),
+            source: ThresholdSource::Manual,
+            notes: reason.clone(),
+            sport: athlete.primary_sport.clone(),
+        };
+        athlete.threshold_history.push(change);
+        changes_made.push(format!("FTP: {} watts", new_ftp.to_string().green()));
+    }
+
+    // Update LTHR
+    if let Some(new_lthr) = lthr {
+        let old_lthr = athlete.profile.lthr;
+        athlete.profile.lthr = Some(new_lthr);
+
+        let change = ThresholdChange {
+            date: now.date_naive(),
+            threshold_type: ThresholdType::Lthr,
+            old_value: old_lthr.map(|v| rust_decimal::Decimal::from(v)),
+            new_value: rust_decimal::Decimal::from(new_lthr),
+            source: ThresholdSource::Manual,
+            notes: reason.clone(),
+            sport: athlete.primary_sport.clone(),
+        };
+        athlete.threshold_history.push(change);
+        changes_made.push(format!("LTHR: {} bpm", new_lthr.to_string().red()));
+    }
+
+    // Update threshold pace
+    if let Some(new_pace) = threshold_pace {
+        let old_pace = athlete.profile.threshold_pace;
+        athlete.profile.threshold_pace = Some(rust_decimal::Decimal::try_from(new_pace)?);
+
+        let change = ThresholdChange {
+            date: now.date_naive(),
+            threshold_type: ThresholdType::ThresholdPace,
+            old_value: old_pace,
+            new_value: rust_decimal::Decimal::try_from(new_pace)?,
+            source: ThresholdSource::Manual,
+            notes: reason.clone(),
+            sport: athlete.primary_sport.clone(),
+        };
+        athlete.threshold_history.push(change);
+        changes_made.push(format!("Threshold Pace: {:.2} min/km", new_pace.to_string().blue()));
+    }
+
+    // Update other fields
+    if let Some(new_max_hr) = max_hr {
+        athlete.profile.max_hr = Some(new_max_hr);
+        changes_made.push(format!("Max HR: {} bpm", new_max_hr.to_string().red()));
+    }
+
+    if let Some(new_resting_hr) = resting_hr {
+        athlete.profile.resting_hr = Some(new_resting_hr);
+        changes_made.push(format!("Resting HR: {} bpm", new_resting_hr.to_string().blue()));
+    }
+
+    if let Some(new_weight) = weight {
+        athlete.profile.weight = Some(rust_decimal::Decimal::try_from(new_weight)?);
+        changes_made.push(format!("Weight: {} kg", new_weight.to_string().green()));
+    }
+
+    if changes_made.is_empty() {
+        println!("{}", "No changes specified.".yellow());
+        return Ok(());
+    }
+
+    // Update timestamp
+    athlete.last_updated = now;
+
+    // Get athlete name before save
+    let athlete_name = athlete.profile.name.clone();
+
+    // Save configuration
+    config.save()?;
+
+    println!("{} Updated athlete: {}", "✅".green(), athlete_name.yellow().bold());
+    for change in changes_made {
+        println!("• {}", change);
+    }
+
+    if let Some(reason_text) = reason {
+        println!("Reason: {}", reason_text.dimmed());
+    }
+
+    Ok(())
+}
+
+/// Delete an athlete profile
+fn handle_athlete_delete(name: String, force: bool) -> Result<()> {
+    use crate::config::AppConfig;
+    use colored::Colorize;
+    use std::io::{self, Write};
+
+    let mut config = AppConfig::load_or_default();
+
+    // Check if athlete exists
+    if !config.athletes.contains_key(&name) {
+        return Err(anyhow::anyhow!("Athlete '{}' not found", name));
+    }
+
+    // Get athlete data before modification
+    let (athlete_name, data_directory) = {
+        let athlete = config.athletes.get(&name).unwrap();
+        (athlete.profile.name.clone(), athlete.data_directory.clone())
+    };
+    let is_default = config.default_athlete_id.as_ref() == Some(&name);
+
+    // Confirmation unless forced
+    if !force {
+        println!("{} About to delete athlete: {}", "⚠️".yellow(), athlete_name.yellow().bold());
+        if is_default {
+            println!("{} This is your default athlete!", "⚠️".red());
+        }
+        println!("Data directory: {}", data_directory.display().to_string().dimmed());
+        print!("Are you sure? (y/N): ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+
+        if !input.trim().to_lowercase().starts_with('y') {
+            println!("Deletion cancelled.");
+            return Ok(());
+        }
+    }
+
+    // Remove athlete
+    config.athletes.remove(&name);
+
+    // Update default athlete if needed
+    if is_default {
+        config.default_athlete_id = config.athletes.keys().next().cloned();
+        if let Some(new_default) = &config.default_athlete_id {
+            println!("New default athlete: {}", config.athletes.get(new_default).unwrap().profile.name.yellow());
+        }
+    }
+
+    // Save configuration
+    config.save()?;
+
+    println!("{} Athlete '{}' deleted successfully", "✅".green(), athlete_name);
+
+    // Note about data directory
+    if data_directory.exists() {
+        println!("{} Data directory preserved at: {}", "ℹ️".blue(), data_directory.display());
+        println!("Remove manually if no longer needed.");
+    }
+
+    Ok(())
+}
+
+/// Add sport-specific profile for an athlete
+fn handle_athlete_add_sport(
+    athlete: Option<String>,
+    sport: String,
+    ftp: Option<u16>,
+    lthr: Option<u16>,
+    threshold_pace: Option<f64>,
+    max_hr: Option<u16>,
+    zone_method: Option<String>,
+) -> Result<()> {
+    use crate::config::{AppConfig, SportProfile};
+    use colored::Colorize;
+
+    let mut config = AppConfig::load_or_default();
+
+    // Determine which athlete to update
+    let athlete_id = if let Some(name) = athlete {
+        if !config.athletes.contains_key(&name) {
+            return Err(anyhow::anyhow!("Athlete '{}' not found", name));
+        }
+        name
+    } else {
+        config.default_athlete_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("No default athlete set. Use --athlete to specify an athlete."))?
+    };
+
+    // Parse sport
+    let sport_enum = match sport.to_lowercase().as_str() {
+        "cycling" => crate::models::Sport::Cycling,
+        "running" => crate::models::Sport::Running,
+        "swimming" => crate::models::Sport::Swimming,
+        "triathlon" => crate::models::Sport::Triathlon,
+        _ => return Err(anyhow::anyhow!("Unknown sport: {}", sport)),
+    };
+
+    // Extract athlete name before mutable operations
+    let athlete_name = {
+        let athlete_config = config.athletes.get(&athlete_id).unwrap();
+        athlete_config.profile.name.clone()
+    };
+
+    let athlete_config = config.athletes.get_mut(&athlete_id).unwrap();
+
+    // Check if sport profile already exists
+    if athlete_config.sport_profiles.contains_key(&sport_enum) {
+        println!("{} Sport profile for {} already exists", "⚠️".yellow(), format!("{:?}", sport_enum).cyan());
+        println!("Use 'trainrs athlete set' to update thresholds");
+        return Ok(());
+    }
+
+    // Create sport profile
+    let sport_profile = SportProfile {
+        sport: sport_enum.clone(),
+        ftp,
+        lthr,
+        threshold_pace: threshold_pace.map(rust_decimal::Decimal::try_from).transpose()?,
+        threshold_swim_pace: None,
+        critical_power: None,
+        awc: None,
+        zones: None,
+        last_test_date: None,
+        max_hr,
+        zone_method: zone_method.clone(),
+        last_updated: chrono::Utc::now(),
+        notes: None,
+    };
+
+    // Add sport profile
+    athlete_config.sport_profiles.insert(sport_enum.clone(), sport_profile);
+    athlete_config.last_updated = chrono::Utc::now();
+
+    // Save configuration
+    config.save()?;
+
+    println!("{} Added {} profile for {}",
+        "✅".green(),
+        format!("{:?}", sport_enum).cyan(),
+        athlete_name.yellow().bold()
+    );
+
+    // Display configured thresholds
+    if let Some(ftp_val) = ftp {
+        println!("FTP:           {} watts", ftp_val.to_string().green());
+    }
+    if let Some(lthr_val) = lthr {
+        println!("LTHR:          {} bpm", lthr_val.to_string().red());
+    }
+    if let Some(pace) = threshold_pace {
+        println!("Threshold Pace: {:.2} min/km", pace.to_string().blue());
+    }
+    if let Some(method) = zone_method {
+        println!("Zone Method:   {}", method.cyan());
+    }
+
+    Ok(())
+}
+
+/// Import athlete data from external source
+fn handle_athlete_import(
+    file: std::path::PathBuf,
+    format: Option<String>,
+    merge: bool,
+    overwrite: bool,
+) -> Result<()> {
+    use colored::Colorize;
+
+    println!("{} Import functionality not yet implemented", "⚠️".yellow());
+    println!("File:      {}", file.display().to_string().cyan());
+    println!("Format:    {}", format.unwrap_or_else(|| "auto-detect".to_string()).dimmed());
+    println!("Merge:     {}", merge);
+    println!("Overwrite: {}", overwrite);
+
+    println!("\n{} This feature will be available in a future release.", "ℹ️".blue());
+    println!("Supported formats will include: JSON, CSV, TrainingPeaks exports");
+
+    Ok(())
+}
+
+/// Export athlete data
+fn handle_athlete_export(
+    output: std::path::PathBuf,
+    athlete: Option<String>,
+    format: String,
+    include_history: bool,
+    include_sports: bool,
+) -> Result<()> {
+    use crate::config::AppConfig;
+    use colored::Colorize;
+
+    let config = AppConfig::load_or_default();
+
+    // Determine which athlete to export
+    let athlete_id = if let Some(name) = athlete {
+        if !config.athletes.contains_key(&name) {
+            return Err(anyhow::anyhow!("Athlete '{}' not found", name));
+        }
+        name
+    } else {
+        config.default_athlete_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("No default athlete set. Use --athlete to specify an athlete."))?
+    };
+
+    let athlete_config = config.athletes.get(&athlete_id).unwrap();
+
+    match format.as_str() {
+        "json" => {
+            let mut export_data = serde_json::json!({
+                "athlete": {
+                    "id": athlete_id,
+                    "profile": athlete_config.profile,
+                    "primary_sport": athlete_config.primary_sport,
+                    "created_date": athlete_config.created_date,
+                    "last_updated": athlete_config.last_updated,
+                }
+            });
+
+            if include_sports {
+                export_data["sport_profiles"] = serde_json::to_value(&athlete_config.sport_profiles)?;
+            }
+
+            if include_history {
+                export_data["threshold_history"] = serde_json::to_value(&athlete_config.threshold_history)?;
+            }
+
+            std::fs::write(&output, serde_json::to_string_pretty(&export_data)?)?;
+        }
+        "csv" => {
+            return Err(anyhow::anyhow!("CSV export not yet implemented"));
+        }
+        _ => {
+            return Err(anyhow::anyhow!("Unsupported export format: {}", format));
+        }
+    }
+
+    println!("{} Exported athlete data: {}", "✅".green(), athlete_config.profile.name.yellow());
+    println!("File:         {}", output.display().to_string().cyan());
+    println!("Format:       {}", format.cyan());
+    println!("Include Sports: {}", include_sports);
+    println!("Include History: {}", include_history);
+
+    Ok(())
 }
