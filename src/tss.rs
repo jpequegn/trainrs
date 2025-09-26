@@ -746,4 +746,367 @@ mod tests {
         assert!(result.tss > dec!(0));
         assert!(result.intensity_factor.is_some());
     }
+
+    // Property-based tests using proptest
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn test_power_tss_properties(
+            ftp in 150u16..400u16,
+            avg_power in 100u16..500u16,
+            duration in 1800u32..7200u32 // 30 minutes to 2 hours
+        ) {
+            let athlete = create_test_athlete_with_ftp(ftp);
+            let workout = create_test_power_workout(avg_power, duration);
+
+            let result = TssCalculator::calculate_power_tss(&workout, &athlete);
+
+            // TSS should always be calculated successfully for valid inputs
+            prop_assert!(result.is_ok());
+            let tss_result = result.unwrap();
+
+            // TSS should be positive
+            prop_assert!(tss_result.tss > dec!(0));
+
+            // TSS should be reasonable (typically 1-500 for normal workouts)
+            prop_assert!(tss_result.tss <= dec!(500));
+
+            // Intensity factor should be reasonable (0.3-2.0)
+            if let Some(if_value) = tss_result.intensity_factor {
+                prop_assert!(if_value >= dec!(0.3) && if_value <= dec!(2.0));
+            }
+
+            // Higher power should generally result in higher TSS for same duration
+            if avg_power > ftp {
+                prop_assert!(tss_result.tss >= dec!(100.0) * Decimal::from(duration) / dec!(3600));
+            }
+        }
+
+        #[test]
+        fn test_hr_tss_properties(
+            lthr in 140u16..180u16,
+            avg_hr in 120u16..200u16,
+            duration in 1800u32..7200u32
+        ) {
+            let athlete = create_test_athlete_with_lthr(lthr);
+            let workout = create_test_hr_workout(avg_hr, duration);
+
+            let result = TssCalculator::calculate_heart_rate_tss(&workout, &athlete);
+
+            prop_assert!(result.is_ok());
+            let tss_result = result.unwrap();
+
+            prop_assert!(tss_result.tss > dec!(0));
+            prop_assert!(tss_result.tss <= dec!(500));
+
+            if let Some(if_value) = tss_result.intensity_factor {
+                prop_assert!(if_value >= dec!(0.5) && if_value <= dec!(1.5));
+            }
+        }
+
+        #[test]
+        fn test_pace_tss_properties(
+            threshold_pace_seconds in 240u32..480u32, // 4-8 minutes per mile
+            avg_pace_seconds in 300u32..600u32, // 5-10 minutes per mile
+            duration in 1800u32..7200u32
+        ) {
+            let threshold_pace = Decimal::from(threshold_pace_seconds) / dec!(60); // Convert to minutes
+            let avg_pace = Decimal::from(avg_pace_seconds) / dec!(60);
+
+            let athlete = create_test_athlete_with_pace(threshold_pace);
+            let workout = create_test_pace_workout(avg_pace, duration);
+
+            let result = TssCalculator::calculate_pace_tss(&workout, &athlete);
+
+            prop_assert!(result.is_ok());
+            let tss_result = result.unwrap();
+
+            prop_assert!(tss_result.tss > dec!(0));
+            prop_assert!(tss_result.tss <= dec!(400));
+        }
+
+        #[test]
+        fn test_tss_scales_with_duration(
+            power in 200u16..300u16,
+            duration1 in 1800u32..3600u32,
+        ) {
+            let duration2 = duration1 * 2; // Double the duration
+            let athlete = create_test_athlete_with_ftp(250);
+
+            let workout1 = create_test_power_workout(power, duration1);
+            let workout2 = create_test_power_workout(power, duration2);
+
+            let tss1 = TssCalculator::calculate_power_tss(&workout1, &athlete).unwrap().tss;
+            let tss2 = TssCalculator::calculate_power_tss(&workout2, &athlete).unwrap().tss;
+
+            // TSS should roughly double with double duration (within 20% tolerance)
+            let ratio = tss2 / tss1;
+            prop_assert!(ratio >= dec!(1.8) && ratio <= dec!(2.2));
+        }
+
+        #[test]
+        fn test_normalized_power_properties(
+            powers in prop::collection::vec(150u16..350u16, 30..300)
+        ) {
+            // Create DataPoint structures with power values
+            let data_points: Vec<DataPoint> = powers.iter().enumerate().map(|(i, &p)| DataPoint {
+                timestamp: i as u32,
+                heart_rate: Some(150),
+                power: Some(p),
+                pace: None,
+                elevation: None,
+                cadence: Some(90),
+                speed: None,
+                distance: None,
+                left_power: Some(p / 2),
+                right_power: Some(p / 2),
+            }).collect();
+
+            let np = TssCalculator::calculate_normalized_power(&data_points).unwrap();
+
+            prop_assert!(np > 0);
+
+            let avg_power = powers.iter().sum::<u16>() / powers.len() as u16;
+
+            // Normalized power should be close to average power for steady efforts
+            // but can be higher for variable efforts
+            prop_assert!(np >= (avg_power as f32 * 0.8) as u16);
+            prop_assert!(np <= (avg_power as f32 * 1.5) as u16);
+        }
+    }
+
+    // Helper functions for property tests
+    fn create_test_athlete_with_ftp(ftp: u16) -> AthleteProfile {
+        AthleteProfile {
+            id: "test_athlete".to_string(),
+            name: "Test Athlete".to_string(),
+            date_of_birth: Some(NaiveDate::from_ymd_opt(1990, 1, 1).unwrap()),
+            weight: Some(dec!(70.0)),
+            height: Some(175),
+            ftp: Some(ftp),
+            lthr: Some(165),
+            threshold_pace: Some(dec!(6.0)),
+            max_hr: Some(190),
+            resting_hr: Some(50),
+            training_zones: TrainingZones::default(),
+            preferred_units: Units::Metric,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn create_test_athlete_with_lthr(lthr: u16) -> AthleteProfile {
+        AthleteProfile {
+            id: "test_athlete".to_string(),
+            name: "Test Athlete".to_string(),
+            date_of_birth: Some(NaiveDate::from_ymd_opt(1990, 1, 1).unwrap()),
+            weight: Some(dec!(70.0)),
+            height: Some(175),
+            ftp: Some(250),
+            lthr: Some(lthr),
+            threshold_pace: Some(dec!(6.0)),
+            max_hr: Some(190),
+            resting_hr: Some(50),
+            training_zones: TrainingZones::default(),
+            preferred_units: Units::Metric,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn create_test_athlete_with_pace(threshold_pace: Decimal) -> AthleteProfile {
+        AthleteProfile {
+            id: "test_athlete".to_string(),
+            name: "Test Athlete".to_string(),
+            date_of_birth: Some(NaiveDate::from_ymd_opt(1990, 1, 1).unwrap()),
+            weight: Some(dec!(70.0)),
+            height: Some(175),
+            ftp: Some(250),
+            lthr: Some(165),
+            threshold_pace: Some(threshold_pace),
+            max_hr: Some(190),
+            resting_hr: Some(50),
+            training_zones: TrainingZones::default(),
+            preferred_units: Units::Metric,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn create_test_power_workout(avg_power: u16, duration: u32) -> Workout {
+        Workout {
+            id: "test_power".to_string(),
+            athlete_id: Some("test".to_string()),
+            date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            sport: Sport::Cycling,
+            workout_type: WorkoutType::Endurance,
+            duration_seconds: duration,
+            summary: WorkoutSummary {
+                avg_power: Some(avg_power),
+                normalized_power: Some(avg_power + 10),
+                ..Default::default()
+            },
+            data_source: DataSource::Power,
+            notes: None,
+            source: None,
+            raw_data: Some(vec![DataPoint {
+                timestamp: 0,
+                heart_rate: Some(150),
+                power: Some(avg_power),
+                pace: None,
+                elevation: None,
+                cadence: Some(90),
+                speed: None,
+                distance: None,
+                left_power: Some(avg_power / 2),
+                right_power: Some(avg_power / 2),
+            }]),
+        }
+    }
+
+    fn create_test_hr_workout(avg_hr: u16, duration: u32) -> Workout {
+        Workout {
+            id: "test_hr".to_string(),
+            athlete_id: Some("test".to_string()),
+            date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            sport: Sport::Cycling,
+            workout_type: WorkoutType::Endurance,
+            duration_seconds: duration,
+            summary: WorkoutSummary {
+                avg_heart_rate: Some(avg_hr),
+                max_heart_rate: Some(avg_hr + 20),
+                ..Default::default()
+            },
+            data_source: DataSource::HeartRate,
+            notes: None,
+            source: None,
+            raw_data: Some(vec![DataPoint {
+                timestamp: 0,
+                heart_rate: Some(avg_hr),
+                power: None,
+                pace: None,
+                elevation: None,
+                cadence: Some(90),
+                speed: None,
+                distance: None,
+                left_power: None,
+                right_power: None,
+            }]),
+        }
+    }
+
+    fn create_test_pace_workout(avg_pace: Decimal, duration: u32) -> Workout {
+        Workout {
+            id: "test_pace".to_string(),
+            athlete_id: Some("test".to_string()),
+            date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            sport: Sport::Running,
+            workout_type: WorkoutType::Endurance,
+            duration_seconds: duration,
+            summary: WorkoutSummary {
+                avg_heart_rate: Some(150),
+                avg_pace: Some(avg_pace),
+                total_distance: Some(dec!(10.0)),
+                ..Default::default()
+            },
+            data_source: DataSource::Pace,
+            notes: None,
+            source: None,
+            raw_data: Some(vec![DataPoint {
+                timestamp: 0,
+                heart_rate: Some(150),
+                power: None,
+                pace: Some(avg_pace),
+                elevation: None,
+                cadence: Some(90),
+                speed: Some(dec!(5.0)),
+                distance: Some(dec!(0.0)),
+                left_power: None,
+                right_power: None,
+            }]),
+        }
+    }
+
+    // Regression tests with known TSS values
+    #[test]
+    fn test_known_tss_values() {
+        // Simple known TSS test cases for regression testing
+        let test_cases = vec![
+            (create_test_power_workout(150, 3600), dec!(65.0)), // Easy endurance
+            (create_test_power_workout(250, 2400), dec!(100.0)), // Threshold
+        ];
+        let athlete = create_test_athlete_with_ftp(250);
+
+        for (workout, expected_tss) in test_cases {
+            let result = TssCalculator::calculate_tss(&workout, &athlete);
+
+            assert!(result.is_ok(), "TSS calculation failed for workout: {:?}", workout.sport);
+            let calculated_tss = result.unwrap().tss;
+
+            // Allow 10% tolerance for TSS calculations
+            let tolerance = expected_tss * dec!(0.1);
+            let diff = (calculated_tss - expected_tss).abs();
+
+            assert!(
+                diff <= tolerance,
+                "TSS mismatch for {:?}: expected {}, got {}, diff: {}",
+                workout.sport, expected_tss, calculated_tss, diff
+            );
+        }
+    }
+
+    // Edge case tests
+    #[test]
+    fn test_edge_cases() {
+        // Create simple edge case workouts
+        let edge_cases = vec![
+            ("zero_duration", create_test_power_workout(200, 0)),
+            ("very_short_workout", create_test_power_workout(200, 30)),
+            ("extreme_high_power", create_test_power_workout(1000, 3600)),
+            ("extreme_low_power", create_test_power_workout(50, 3600)),
+        ];
+        let athlete = create_test_athlete_with_ftp(250);
+
+        for (case_name, workout) in edge_cases {
+            let result = TssCalculator::calculate_tss(&workout, &athlete);
+
+            match case_name {
+                "zero_duration" => {
+                    // Zero duration should either fail gracefully or return zero TSS
+                    if let Ok(tss_result) = result {
+                        assert_eq!(tss_result.tss, dec!(0));
+                    }
+                }
+                "very_short_workout" => {
+                    // Very short workouts should still calculate
+                    assert!(result.is_ok());
+                    if let Ok(tss_result) = result {
+                        assert!(tss_result.tss >= dec!(0));
+                        assert!(tss_result.tss <= dec!(5)); // Should be very low
+                    }
+                }
+                "very_long_workout" => {
+                    // Very long workouts should still work
+                    assert!(result.is_ok());
+                    if let Ok(tss_result) = result {
+                        assert!(tss_result.tss > dec!(100)); // Should be substantial
+                    }
+                }
+                "extreme_high_power" => {
+                    // Extreme values should either work or fail gracefully
+                    if let Ok(tss_result) = result {
+                        assert!(tss_result.tss > dec!(200)); // Should be very high
+                        assert!(tss_result.tss <= dec!(2000)); // But not unreasonable
+                    }
+                }
+                _ => {
+                    // Other cases should generally work
+                    if result.is_err() {
+                        println!("Expected failure for case: {}", case_name);
+                    }
+                }
+            }
+        }
+    }
 }

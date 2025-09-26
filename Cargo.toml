@@ -3,6 +3,14 @@ name = "trainrs"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "trainrs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "trainrs"
+path = "src/main.rs"
+
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -38,3 +46,9 @@ charts = ["plotters"]
 [dev-dependencies]
 rust_decimal_macros = "1.36"
 tempfile = "3.8"
+proptest = "1.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "performance_benchmarks"
+harness = false

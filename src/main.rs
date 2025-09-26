@@ -22,6 +22,8 @@ mod training_plan;
 mod tss;
 mod zones;
 
+// Test utilities have been integrated into individual test files
+
 /// TrainRS - Training Load Analysis CLI
 ///
 /// A Rust-based tool for analyzing workout data and calculating training loads
