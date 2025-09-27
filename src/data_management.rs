@@ -1,6 +1,6 @@
 use anyhow::Result;
-use chrono::{DateTime, Utc, NaiveDate};
-use std::collections::{HashMap, HashSet};
+use chrono::NaiveDate;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -8,6 +8,7 @@ use crate::database::{Database, DatabaseError, DatabaseStats};
 use crate::models::{Workout, Sport};
 
 /// Comprehensive data management and cleanup utilities
+#[allow(dead_code)]
 pub struct DataManager {
     database: Database,
     backup_directory: Option<PathBuf>,
@@ -372,6 +373,7 @@ impl DataManager {
 }
 
 /// Comprehensive cleanup report
+#[allow(dead_code)]
 #[derive(Debug, Default)]
 pub struct CleanupReport {
     pub duplicates_removed: usize,
@@ -406,6 +408,7 @@ impl CleanupReport {
 }
 
 /// Archive operation report
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct ArchiveReport {
     pub workouts_archived: usize,
@@ -414,6 +417,7 @@ pub struct ArchiveReport {
 }
 
 /// Database health report
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct HealthReport {
     pub database_stats: DatabaseStats,

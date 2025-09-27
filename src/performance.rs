@@ -1,5 +1,6 @@
+#![allow(dead_code)]
+
 use anyhow::Result;
-use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -10,11 +11,12 @@ use crate::pmc::{PmcCalculator, PmcMetrics};
 use crate::tss::TssCalculator;
 
 /// Performance optimized batch operations for large datasets
+#[allow(dead_code)]
 pub struct PerformanceBatchProcessor {
     /// Cache for frequently accessed data
     cache: Arc<Mutex<HashMap<String, CachedResult>>>,
     /// Number of parallel threads to use
-    thread_count: usize,
+    _thread_count: usize,
 }
 
 /// Cached calculation results with timestamps
@@ -52,7 +54,7 @@ impl PerformanceBatchProcessor {
 
         Self {
             cache: Arc::new(Mutex::new(HashMap::new())),
-            thread_count,
+            _thread_count: thread_count,
         }
     }
 
@@ -60,7 +62,7 @@ impl PerformanceBatchProcessor {
     pub fn with_thread_count(thread_count: usize) -> Self {
         Self {
             cache: Arc::new(Mutex::new(HashMap::new())),
-            thread_count,
+            _thread_count: thread_count,
         }
     }
 
@@ -177,7 +179,7 @@ impl PerformanceBatchProcessor {
         let mut updated_workouts = Vec::new();
         let mut processing_count = 0;
 
-        for (idx, workout_result) in workouts.into_iter().enumerate() {
+        for (_idx, workout_result) in workouts.into_iter().enumerate() {
             match workout_result {
                 Ok(Some(mut workout)) => {
                     if workout.summary.tss.is_none() {

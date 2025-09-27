@@ -2717,7 +2717,7 @@ fn handle_multisport_commands(command: &multisport::MultiSportCommands, _cli: &C
 }
 
 /// Handle training plan generation and monitoring commands
-fn handle_training_plan_commands(command: &training_plan::TrainingPlanCommands, cli: &Cli) -> Result<()> {
+fn handle_training_plan_commands(command: &training_plan::TrainingPlanCommands, _cli: &Cli) -> Result<()> {
     use crate::training_plan;
     use colored::Colorize;
 
@@ -3165,6 +3165,7 @@ fn display_elevation_analysis(elevation_analysis: &crate::running::ElevationAnal
 }
 
 /// Display performance predictions
+#[allow(dead_code)]
 fn display_performance_predictions(predictions: &crate::running::PerformancePrediction, show_all: bool, target_distance: &Option<String>) {
     use colored::Colorize;
 
@@ -3253,6 +3254,7 @@ fn display_running_zones(zones: &crate::running::RunningZones, unit: &str, _incl
 }
 
 /// Format time from seconds to MM:SS or HH:MM:SS format
+#[allow(dead_code)]
 fn format_time_from_seconds(total_seconds: rust_decimal::Decimal) -> String {
     let seconds = total_seconds.to_u32().unwrap_or(0);
     let hours = seconds / 3600;
@@ -4242,7 +4244,7 @@ fn display_power_balance(balance: &crate::power::PowerBalance) {
 
 /// Handle configuration commands
 fn handle_config_commands(list: bool, set: Option<String>, get: Option<String>) -> Result<()> {
-    use crate::config::{AppConfig, AthleteConfig};
+    use crate::config::AppConfig;
     use colored::Colorize;
 
     println!("{}", "⚙️ Configuration Management".cyan().bold());
@@ -4463,7 +4465,8 @@ fn display_config_status(config: &crate::config::AppConfig) -> Result<()> {
 
 /// Handle athlete management commands
 fn handle_athlete_commands(command: AthleteCommands) -> Result<()> {
-    use crate::config::{AppConfig, AthleteConfig, SportProfile, ThresholdChange};
+    #[allow(unused_imports)]
+    use crate::config::AppConfig;
     use colored::Colorize;
 
     println!("{}", "👤 Athlete Management".cyan().bold());

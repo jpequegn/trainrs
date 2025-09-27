@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::models::{DataPoint, Sport, Workout, WorkoutSummary, WorkoutType, DataSource};
 
 /// Database error types
+#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub enum DatabaseError {
     #[error("SQLite error: {0}")]
@@ -28,6 +29,7 @@ pub enum DatabaseError {
 }
 
 /// Compressed time-series data for efficient storage
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompressedTimeSeriesData {
     pub compressed_data: Vec<u8>,
@@ -77,6 +79,7 @@ impl CompressedTimeSeriesData {
 }
 
 /// Database connection and management
+#[allow(dead_code)]
 pub struct Database {
     conn: Connection,
     cache: HashMap<String, Vec<u8>>, // Simple in-memory cache for frequently accessed data
@@ -599,6 +602,7 @@ impl Database {
 }
 
 /// Workout query filters
+#[allow(dead_code)]
 #[derive(Debug, Default, Clone)]
 pub struct WorkoutFilters {
     pub athlete_id: Option<String>,
@@ -609,6 +613,7 @@ pub struct WorkoutFilters {
 }
 
 /// Database statistics
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct DatabaseStats {
     pub workout_count: usize,
@@ -621,6 +626,7 @@ pub struct DatabaseStats {
 }
 
 /// Duplicate workout information
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct DuplicateWorkout {
     pub workout_id: String,

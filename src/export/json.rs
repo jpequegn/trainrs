@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::{TrainingReport, ExportError};
 use std::path::Path;
 use std::io::Write;

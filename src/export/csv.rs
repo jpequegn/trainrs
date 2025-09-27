@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::models::Workout;
 use crate::pmc::PmcMetrics;
 use super::ExportError;
