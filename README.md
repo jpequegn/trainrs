@@ -40,7 +40,7 @@ The tool supports various periodization models:
 
 ### Prerequisites
 
-- Rust 1.70+ (install from [rustup.rs](https://rustup.rs/))
+- Rust 1.80+ (install from [rustup.rs](https://rustup.rs/))
 
 ### From Source
 
