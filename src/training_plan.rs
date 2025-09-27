@@ -410,7 +410,7 @@ impl TrainingPlanGenerator {
     /// Generate block periodization weeks
     fn generate_block_weeks(
         goal: &TrainingGoal,
-        recovery: &RecoveryPattern,
+        _recovery: &RecoveryPattern,
         total_weeks: u32,
         start_date: NaiveDate,
         athlete: &AthleteProfile,
@@ -610,7 +610,7 @@ impl TrainingPlanGenerator {
     fn generate_week_workouts(
         week: &TrainingWeek,
         goal: &TrainingGoal,
-        athlete: &AthleteProfile,
+        _athlete: &AthleteProfile,
     ) -> Result<Vec<PlannedWorkout>> {
         let mut workouts = Vec::new();
         let sport = goal.primary_sport();
@@ -671,7 +671,7 @@ impl TrainingPlanGenerator {
         day: usize,
         phase: &str,
         is_recovery: bool,
-        goal: &TrainingGoal,
+        _goal: &TrainingGoal,
     ) -> (WorkoutType, String, Decimal) {
         if is_recovery {
             return (

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::models::{AthleteProfile, HeartRateZones, PaceZones, PowerZones, TrainingZones};
 use anyhow::{anyhow, Result};
 use rust_decimal::prelude::ToPrimitive;

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::models::Workout;
 use chrono::NaiveDate;
 use rust_decimal::prelude::*;

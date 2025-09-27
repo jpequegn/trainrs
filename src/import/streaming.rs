@@ -1,10 +1,11 @@
+#![allow(dead_code)]
+
 use anyhow::Result;
 use std::path::Path;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::database::{Database, DatabaseError};
 use crate::import::ImportManager;
-use crate::models::Workout;
 
 /// Streaming import manager that processes files without loading all data into memory
 pub struct StreamingImportManager {
@@ -31,7 +32,7 @@ impl StreamingImportManager {
         let workouts = self.import_manager.import_file(file_path)
             .map_err(|e| DatabaseError::SerializationError(e.to_string()))?;
 
-        let total_workouts = workouts.len();
+        let _total_workouts = workouts.len();
 
         // Store workouts in chunks to manage memory usage
         let mut stored_count = 0;

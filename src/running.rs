@@ -3,6 +3,8 @@
 //! This module provides comprehensive running analysis including pace zones,
 //! elevation adjustment, performance prediction, and training metrics.
 
+#![allow(dead_code)]
+
 use crate::models::{DataPoint, Sport, Workout};
 use anyhow::{anyhow, Result};
 use rust_decimal::prelude::*;
@@ -21,6 +23,7 @@ pub enum RunningError {
 }
 
 /// Pace Analysis results
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PaceAnalysis {
     /// Average pace in minutes per kilometer or mile
