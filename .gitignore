@@ -26,6 +26,7 @@ data/processed/
 # Test outputs
 test-outputs/
 coverage/
+proptest-regressions/
 
 # Performance profiling
 perf.data*
