@@ -171,6 +171,7 @@ impl ImportManager {
     }
 
     /// Get reference to importers for external use
+    #[allow(dead_code)]
     pub fn get_importers(&self) -> &[Box<dyn ImportFormat>] {
         &self.importers
     }

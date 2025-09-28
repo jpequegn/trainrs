@@ -85,6 +85,7 @@ pub struct Database {
     cache: HashMap<String, Vec<u8>>, // Simple in-memory cache for frequently accessed data
 }
 
+#[allow(dead_code)]
 impl Database {
     /// Create or open a database at the specified path
     pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self, DatabaseError> {

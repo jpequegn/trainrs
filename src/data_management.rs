@@ -14,6 +14,7 @@ pub struct DataManager {
     backup_directory: Option<PathBuf>,
 }
 
+#[allow(dead_code)]
 impl DataManager {
     /// Create a new data manager
     pub fn new(database: Database, backup_directory: Option<PathBuf>) -> Self {
@@ -385,6 +386,7 @@ pub struct CleanupReport {
     pub total_time: std::time::Duration,
 }
 
+#[allow(dead_code)]
 impl CleanupReport {
     pub fn print_summary(&self) {
         println!("\n📊 Cleanup Summary:");
@@ -427,6 +429,7 @@ pub struct HealthReport {
     pub recommendations: Vec<String>,
 }
 
+#[allow(dead_code)]
 impl HealthReport {
     pub fn print_report(&self) {
         println!("\n🏥 Database Health Report:");

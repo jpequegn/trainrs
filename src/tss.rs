@@ -354,6 +354,7 @@ impl TssCalculator {
     }
 
     /// Validate TSS result for sanity check
+    #[allow(dead_code)]
     pub fn validate_tss(tss: Decimal, duration_seconds: u32) -> Result<Decimal, TssError> {
         let duration_hours = Decimal::from(duration_seconds) / Decimal::from(3600);
 
@@ -383,6 +384,7 @@ impl TssCalculator {
 }
 
 /// Integration with WorkoutSummary
+#[allow(dead_code)]
 impl WorkoutSummary {
     /// Calculate and update TSS fields in the summary
     pub fn calculate_tss(&mut self, workout: &Workout, athlete: &AthleteProfile) -> Result<(), TssError> {
