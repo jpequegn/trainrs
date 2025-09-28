@@ -173,6 +173,7 @@ pub fn export_training_report<P: AsRef<Path>>(
 }
 
 /// Export workout summaries in a simple text table format
+#[allow(dead_code)]
 pub fn export_workout_summaries_text<P: AsRef<Path>>(
     workouts: &[&crate::models::Workout],
     output_path: P,

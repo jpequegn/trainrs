@@ -698,6 +698,7 @@ mod tests {
 }
 
 // Implementation methods for integration with zone calculations
+#[allow(dead_code)]
 impl AthleteProfile {
     /// Calculate and update training zones based on current thresholds
     pub fn calculate_zones(&mut self) -> Result<(), crate::zones::ZoneError> {
@@ -745,6 +746,7 @@ impl AthleteProfile {
     }
 }
 
+#[allow(dead_code)]
 impl TrainingZones {
     /// Check if any zones are configured
     pub fn has_any_zones(&self) -> bool {

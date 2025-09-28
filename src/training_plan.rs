@@ -92,6 +92,7 @@ pub enum TrainingGoal {
     ReturnFromBreak,
 }
 
+#[allow(dead_code)]
 impl TrainingGoal {
     pub fn from_str(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
@@ -147,6 +148,7 @@ pub enum RecoveryPattern {
     FourToOne,  // 4 build weeks, 1 recovery week
 }
 
+#[allow(dead_code)]
 impl RecoveryPattern {
     pub fn from_str(s: &str) -> Result<Self> {
         match s {
@@ -755,6 +757,7 @@ impl TrainingPlanGenerator {
 /// Plan monitor for tracking and adjustments
 pub struct PlanMonitor;
 
+#[allow(dead_code)]
 impl PlanMonitor {
     /// Monitor plan progress
     pub fn monitor_progress(

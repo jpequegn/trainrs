@@ -436,6 +436,7 @@ impl Default for ImportSettings {
 }
 
 /// Configuration management implementation
+#[allow(dead_code)]
 impl AppConfig {
     /// Load configuration from TOML file
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
@@ -572,6 +573,7 @@ impl AppConfig {
     }
 }
 
+#[allow(dead_code)]
 impl AthleteConfig {
     /// Create a new athlete configuration
     pub fn new(name: String, athlete_id: Option<String>) -> Self {
