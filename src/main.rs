@@ -3827,7 +3827,14 @@ fn create_sample_intervals_data() -> Vec<DataPoint> {
             left_power: Some(75),
             right_power: Some(75),
             pace: None,
-            elevation: None
+            elevation: None,
+            ground_contact_time: None,
+            vertical_oscillation: None,
+            stride_length: None,
+            stroke_count: None,
+            stroke_type: None,
+            lap_number: None,
+            sport_transition: None,
         });
         timestamp += 1;
     }
@@ -3846,7 +3853,14 @@ fn create_sample_intervals_data() -> Vec<DataPoint> {
                 left_power: Some(148),
                 right_power: Some(152),
                 pace: None,
-            elevation: None
+                elevation: None,
+                ground_contact_time: None,
+                vertical_oscillation: None,
+                stride_length: None,
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: None,
+                sport_transition: None,
             });
             timestamp += 1;
         }
@@ -3863,7 +3877,14 @@ fn create_sample_intervals_data() -> Vec<DataPoint> {
                 left_power: Some(50),
                 right_power: Some(50),
                 pace: None,
-            elevation: None
+                elevation: None,
+                ground_contact_time: None,
+                vertical_oscillation: None,
+                stride_length: None,
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: None,
+                sport_transition: None,
             });
             timestamp += 1;
         }
@@ -3881,7 +3902,14 @@ fn create_sample_intervals_data() -> Vec<DataPoint> {
             left_power: Some(60),
             right_power: Some(60),
             pace: None,
-            elevation: None
+            elevation: None,
+            ground_contact_time: None,
+            vertical_oscillation: None,
+            stride_length: None,
+            stroke_count: None,
+            stroke_type: None,
+            lap_number: None,
+            sport_transition: None,
         });
         timestamp += 1;
     }
@@ -3911,7 +3939,14 @@ fn create_sample_endurance_data() -> Vec<DataPoint> {
             left_power: Some(power / 2 - 2),
             right_power: Some(power / 2 + 2),
             pace: None,
-            elevation: None
+            elevation: None,
+            ground_contact_time: None,
+            vertical_oscillation: None,
+            stride_length: None,
+            stroke_count: None,
+            stroke_type: None,
+            lap_number: None,
+            sport_transition: None,
         });
         timestamp += 1;
     }

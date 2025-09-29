@@ -816,6 +816,232 @@ impl RunningAnalyzer {
             zone6,
         })
     }
+
+    /// Analyze running dynamics from advanced metrics (ground contact time, vertical oscillation, stride length)
+    pub fn analyze_running_dynamics(workout: &Workout) -> Result<RunningDynamics> {
+        if workout.sport != Sport::Running {
+            return Err(anyhow!("Workout must be a running activity"));
+        }
+
+        let raw_data = workout.raw_data.as_ref()
+            .ok_or_else(|| RunningError::InsufficientData("No raw data available".to_string()))?;
+
+        // Filter data points that have running dynamics data
+        let dynamics_data: Vec<&DataPoint> = raw_data.iter()
+            .filter(|dp| dp.ground_contact_time.is_some() ||
+                        dp.vertical_oscillation.is_some() ||
+                        dp.stride_length.is_some())
+            .collect();
+
+        if dynamics_data.is_empty() {
+            return Err(RunningError::InsufficientData("No running dynamics data available".to_string()).into());
+        }
+
+        // Calculate average ground contact time
+        let avg_ground_contact_time = if !dynamics_data.is_empty() {
+            let gct_values: Vec<u16> = dynamics_data.iter()
+                .filter_map(|dp| dp.ground_contact_time)
+                .collect();
+
+            if !gct_values.is_empty() {
+                Some(gct_values.iter().sum::<u16>() / gct_values.len() as u16)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Calculate average vertical oscillation
+        let avg_vertical_oscillation = if !dynamics_data.is_empty() {
+            let vo_values: Vec<u16> = dynamics_data.iter()
+                .filter_map(|dp| dp.vertical_oscillation)
+                .collect();
+
+            if !vo_values.is_empty() {
+                Some(vo_values.iter().sum::<u16>() / vo_values.len() as u16)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Calculate average stride length
+        let avg_stride_length = if !dynamics_data.is_empty() {
+            let sl_values: Vec<Decimal> = dynamics_data.iter()
+                .filter_map(|dp| dp.stride_length)
+                .collect();
+
+            if !sl_values.is_empty() {
+                Some(sl_values.iter().sum::<Decimal>() / Decimal::from(sl_values.len()))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Calculate running efficiency metrics
+        let efficiency_metrics = Self::calculate_running_efficiency_metrics(
+            avg_ground_contact_time,
+            avg_vertical_oscillation,
+            avg_stride_length,
+        )?;
+
+        // Calculate cadence analysis from stride data
+        let cadence_analysis = Self::analyze_cadence_from_dynamics(&dynamics_data)?;
+
+        Ok(RunningDynamics {
+            avg_ground_contact_time,
+            avg_vertical_oscillation,
+            avg_stride_length,
+            efficiency_metrics,
+            cadence_analysis,
+            data_coverage: (dynamics_data.len() as f64 / raw_data.len() as f64 * 100.0) as u8,
+        })
+    }
+
+    /// Calculate running efficiency metrics from dynamics data
+    fn calculate_running_efficiency_metrics(
+        gct: Option<u16>,
+        vo: Option<u16>,
+        stride_length: Option<Decimal>,
+    ) -> Result<RunningEfficiencyMetrics> {
+        let gct_efficiency = gct.map(|contact_time| {
+            // Shorter ground contact time is generally better for efficiency
+            // Good runners typically have 200-250ms contact time
+            match contact_time {
+                0..=200 => EfficiencyRating::Excellent,
+                201..=250 => EfficiencyRating::Good,
+                251..=300 => EfficiencyRating::Average,
+                301..=350 => EfficiencyRating::BelowAverage,
+                _ => EfficiencyRating::Poor,
+            }
+        });
+
+        let vo_efficiency = vo.map(|oscillation| {
+            // Lower vertical oscillation is generally better (less wasted energy)
+            // Good runners typically have 6-10cm vertical oscillation
+            match oscillation {
+            0..=60 => EfficiencyRating::Excellent,    // ≤6cm
+            61..=80 => EfficiencyRating::Good,        // 6.1-8cm
+            81..=100 => EfficiencyRating::Average,    // 8.1-10cm
+            101..=120 => EfficiencyRating::BelowAverage, // 10.1-12cm
+            _ => EfficiencyRating::Poor,              // >12cm
+            }
+        });
+
+        let stride_efficiency = stride_length.map(|length| {
+            // Optimal stride length varies by height and pace
+            // This is a simplified assessment - ideal would factor in runner height
+            if length >= dec!(1.0) && length <= dec!(1.6) {
+                EfficiencyRating::Good
+            } else if length >= dec!(0.8) && length < dec!(1.0) || length > dec!(1.6) && length <= dec!(1.8) {
+                EfficiencyRating::Average
+            } else {
+                EfficiencyRating::BelowAverage
+            }
+        });
+
+        Ok(RunningEfficiencyMetrics {
+            ground_contact_efficiency: gct_efficiency,
+            vertical_oscillation_efficiency: vo_efficiency,
+            stride_length_efficiency: stride_efficiency,
+        })
+    }
+
+    /// Analyze cadence patterns from running dynamics data
+    fn analyze_cadence_from_dynamics(dynamics_data: &[&DataPoint]) -> Result<CadenceAnalysis> {
+        let cadence_values: Vec<u16> = dynamics_data.iter()
+            .filter_map(|dp| dp.cadence)
+            .collect();
+
+        if cadence_values.is_empty() {
+            return Ok(CadenceAnalysis {
+                avg_cadence: None,
+                cadence_variability: None,
+                optimal_cadence_rating: None,
+            });
+        }
+
+        let avg_cadence = cadence_values.iter().sum::<u16>() / cadence_values.len() as u16;
+
+        // Calculate cadence variability (standard deviation)
+        let mean = avg_cadence as f64;
+        let variance = cadence_values.iter()
+            .map(|&x| {
+                let diff = x as f64 - mean;
+                diff * diff
+            })
+            .sum::<f64>() / cadence_values.len() as f64;
+        let std_dev = variance.sqrt();
+        let cadence_variability = (std_dev / mean * 100.0) as u8; // Coefficient of variation as percentage
+
+        // Rate optimal cadence (180 steps/min is often considered optimal)
+        let optimal_cadence_rating = match avg_cadence {
+            170..=190 => EfficiencyRating::Excellent,
+            160..=169 | 191..=200 => EfficiencyRating::Good,
+            150..=159 | 201..=210 => EfficiencyRating::Average,
+            140..=149 | 211..=220 => EfficiencyRating::BelowAverage,
+            _ => EfficiencyRating::Poor,
+        };
+
+        Ok(CadenceAnalysis {
+            avg_cadence: Some(avg_cadence),
+            cadence_variability: Some(cadence_variability),
+            optimal_cadence_rating: Some(optimal_cadence_rating),
+        })
+    }
+}
+
+/// Running dynamics analysis results from advanced metrics
+#[derive(Debug, Clone)]
+pub struct RunningDynamics {
+    /// Average ground contact time in milliseconds
+    pub avg_ground_contact_time: Option<u16>,
+    /// Average vertical oscillation in millimeters (10ths of cm)
+    pub avg_vertical_oscillation: Option<u16>,
+    /// Average stride length in meters
+    pub avg_stride_length: Option<Decimal>,
+    /// Efficiency metrics derived from dynamics data
+    pub efficiency_metrics: RunningEfficiencyMetrics,
+    /// Cadence analysis
+    pub cadence_analysis: CadenceAnalysis,
+    /// Percentage of workout data that includes dynamics (0-100%)
+    pub data_coverage: u8,
+}
+
+/// Running efficiency metrics derived from dynamics
+#[derive(Debug, Clone)]
+pub struct RunningEfficiencyMetrics {
+    /// Ground contact time efficiency rating
+    pub ground_contact_efficiency: Option<EfficiencyRating>,
+    /// Vertical oscillation efficiency rating
+    pub vertical_oscillation_efficiency: Option<EfficiencyRating>,
+    /// Stride length efficiency rating
+    pub stride_length_efficiency: Option<EfficiencyRating>,
+}
+
+/// Cadence analysis from running dynamics
+#[derive(Debug, Clone)]
+pub struct CadenceAnalysis {
+    /// Average cadence in steps per minute
+    pub avg_cadence: Option<u16>,
+    /// Cadence variability as coefficient of variation percentage
+    pub cadence_variability: Option<u8>,
+    /// Rating of cadence optimality
+    pub optimal_cadence_rating: Option<EfficiencyRating>,
+}
+
+/// Efficiency rating scale for running metrics
+#[derive(Debug, Clone, PartialEq)]
+pub enum EfficiencyRating {
+    Excellent,
+    Good,
+    Average,
+    BelowAverage,
+    Poor,
 }
 
 #[cfg(test)]
@@ -853,6 +1079,13 @@ mod tests {
                 distance: Some(distance),
                 left_power: None,
                 right_power: None,
+                ground_contact_time: None,
+                vertical_oscillation: None,
+                stride_length: None,
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: None,
+                sport_transition: None,
             });
         }
 
@@ -984,5 +1217,170 @@ mod tests {
             assert!(split.duration_seconds > 0);
             assert!(split.avg_pace > dec!(0));
         }
+    }
+
+    #[test]
+    fn test_running_dynamics_analysis() {
+        use crate::models::{WorkoutSummary, WorkoutType, DataSource};
+        use chrono::Utc;
+        use uuid::Uuid;
+
+        // Create workout with running dynamics data
+        let running_data = vec![
+            DataPoint {
+                timestamp: 0,
+                heart_rate: Some(140),
+                power: None,
+                pace: None,
+                elevation: Some(100),
+                cadence: Some(180),
+                speed: Some(dec!(4.0)),
+                distance: Some(dec!(4.0)),
+                left_power: None,
+                right_power: None,
+                ground_contact_time: Some(250), // Good contact time
+                vertical_oscillation: Some(75), // Good vertical oscillation
+                stride_length: Some(dec!(1.3)), // Good stride length
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: Some(1),
+                sport_transition: None,
+            },
+            DataPoint {
+                timestamp: 1,
+                heart_rate: Some(145),
+                power: None,
+                pace: None,
+                elevation: Some(102),
+                cadence: Some(185),
+                speed: Some(dec!(4.2)),
+                distance: Some(dec!(8.2)),
+                left_power: None,
+                right_power: None,
+                ground_contact_time: Some(240), // Excellent contact time
+                vertical_oscillation: Some(70), // Good vertical oscillation
+                stride_length: Some(dec!(1.35)),
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: Some(1),
+                sport_transition: None,
+            },
+        ];
+
+        let workout = Workout {
+            id: Uuid::new_v4().to_string(),
+            date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            sport: Sport::Running,
+            duration_seconds: 3600,
+            workout_type: WorkoutType::Endurance,
+            data_source: DataSource::Pace,
+            raw_data: Some(running_data),
+            summary: WorkoutSummary {
+                avg_heart_rate: Some(142),
+                max_heart_rate: Some(145),
+                avg_power: None,
+                normalized_power: None,
+                avg_pace: Some(dec!(4.1)),
+                intensity_factor: None,
+                tss: None,
+                total_distance: Some(dec!(8200.0)),
+                elevation_gain: Some(2),
+                avg_cadence: Some(182),
+                calories: None,
+            },
+            notes: None,
+            athlete_id: None,
+            source: None,
+        };
+
+        let dynamics = RunningAnalyzer::analyze_running_dynamics(&workout).unwrap();
+
+        // Test averages
+        assert_eq!(dynamics.avg_ground_contact_time, Some(245)); // (250 + 240) / 2
+        assert_eq!(dynamics.avg_vertical_oscillation, Some(72)); // (75 + 70) / 2
+        assert_eq!(dynamics.avg_stride_length, Some(dec!(1.325))); // (1.3 + 1.35) / 2
+
+        // Test efficiency ratings
+        assert_eq!(dynamics.efficiency_metrics.ground_contact_efficiency, Some(EfficiencyRating::Good));
+        assert_eq!(dynamics.efficiency_metrics.vertical_oscillation_efficiency, Some(EfficiencyRating::Good));
+        assert_eq!(dynamics.efficiency_metrics.stride_length_efficiency, Some(EfficiencyRating::Good));
+
+        // Test cadence analysis
+        assert_eq!(dynamics.cadence_analysis.avg_cadence, Some(182)); // (180 + 185) / 2
+        assert_eq!(dynamics.cadence_analysis.optimal_cadence_rating, Some(EfficiencyRating::Excellent));
+
+        // Test data coverage
+        assert_eq!(dynamics.data_coverage, 100); // 100% of data points have dynamics
+    }
+
+    #[test]
+    fn test_efficiency_ratings() {
+        // Test ground contact time ratings
+        let excellent_gct = Some(EfficiencyRating::Excellent);
+        let good_gct = Some(EfficiencyRating::Good);
+        let avg_gct = Some(EfficiencyRating::Average);
+
+        assert_eq!(
+            RunningAnalyzer::calculate_running_efficiency_metrics(Some(200), None, None)
+                .unwrap().ground_contact_efficiency,
+            excellent_gct
+        );
+        assert_eq!(
+            RunningAnalyzer::calculate_running_efficiency_metrics(Some(250), None, None)
+                .unwrap().ground_contact_efficiency,
+            good_gct
+        );
+        assert_eq!(
+            RunningAnalyzer::calculate_running_efficiency_metrics(Some(300), None, None)
+                .unwrap().ground_contact_efficiency,
+            avg_gct
+        );
+
+        // Test vertical oscillation ratings
+        let excellent_vo = Some(EfficiencyRating::Excellent);
+        let good_vo = Some(EfficiencyRating::Good);
+
+        assert_eq!(
+            RunningAnalyzer::calculate_running_efficiency_metrics(None, Some(60), None)
+                .unwrap().vertical_oscillation_efficiency,
+            excellent_vo
+        );
+        assert_eq!(
+            RunningAnalyzer::calculate_running_efficiency_metrics(None, Some(80), None)
+                .unwrap().vertical_oscillation_efficiency,
+            good_vo
+        );
+
+        // Test stride length ratings
+        let good_stride = Some(EfficiencyRating::Good);
+        assert_eq!(
+            RunningAnalyzer::calculate_running_efficiency_metrics(None, None, Some(dec!(1.3)))
+                .unwrap().stride_length_efficiency,
+            good_stride
+        );
+    }
+
+    #[test]
+    fn test_cadence_variability() {
+        // Test cadence analysis with consistent cadence
+        let consistent_data = vec![
+            &DataPoint {
+                timestamp: 0, cadence: Some(180), heart_rate: None, power: None, pace: None,
+                elevation: None, speed: None, distance: None, left_power: None, right_power: None,
+                ground_contact_time: None, vertical_oscillation: None, stride_length: None,
+                stroke_count: None, stroke_type: None, lap_number: None, sport_transition: None,
+            },
+            &DataPoint {
+                timestamp: 1, cadence: Some(180), heart_rate: None, power: None, pace: None,
+                elevation: None, speed: None, distance: None, left_power: None, right_power: None,
+                ground_contact_time: None, vertical_oscillation: None, stride_length: None,
+                stroke_count: None, stroke_type: None, lap_number: None, sport_transition: None,
+            },
+        ];
+
+        let analysis = RunningAnalyzer::analyze_cadence_from_dynamics(&consistent_data).unwrap();
+        assert_eq!(analysis.avg_cadence, Some(180));
+        assert_eq!(analysis.cadence_variability, Some(0)); // No variability
+        assert_eq!(analysis.optimal_cadence_rating, Some(EfficiencyRating::Excellent));
     }
 }

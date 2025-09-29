@@ -68,6 +68,29 @@ pub struct DataPoint {
 
     /// Right leg power output in watts (power meter balance)
     pub right_power: Option<u16>,
+
+    /// Running-specific metrics
+    /// Ground contact time in milliseconds (running dynamics)
+    pub ground_contact_time: Option<u16>,
+
+    /// Vertical oscillation in millimeters (running dynamics)
+    pub vertical_oscillation: Option<u16>,
+
+    /// Stride length in meters (running dynamics)
+    pub stride_length: Option<Decimal>,
+
+    /// Swimming-specific metrics
+    /// Stroke count per length/lap
+    pub stroke_count: Option<u16>,
+
+    /// Swimming stroke type (freestyle, backstroke, breaststroke, butterfly)
+    pub stroke_type: Option<u8>,
+
+    /// Current lap number (for lap-based sports)
+    pub lap_number: Option<u16>,
+
+    /// Sport transition indicator (for triathlon/multi-sport activities)
+    pub sport_transition: Option<bool>,
 }
 
 /// Summary metrics calculated from workout data
@@ -342,6 +365,13 @@ mod tests {
             distance: Some(dec!(1000.0)),
             left_power: Some(125),
             right_power: Some(125),
+            ground_contact_time: None,
+            vertical_oscillation: None,
+            stride_length: None,
+            stroke_count: None,
+            stroke_type: None,
+            lap_number: None,
+            sport_transition: None,
         };
 
         assert_eq!(data_point.timestamp, 60);
@@ -363,6 +393,13 @@ mod tests {
             distance: Some(dec!(500.0)),
             left_power: None,
             right_power: None,
+            ground_contact_time: None,
+            vertical_oscillation: None,
+            stride_length: None,
+            stroke_count: None,
+            stroke_type: None,
+            lap_number: None,
+            sport_transition: None,
         };
 
         let json = serde_json::to_string(&data_point).unwrap();
@@ -441,6 +478,13 @@ mod tests {
                 distance: Some(dec!(0.0)),
                 left_power: None,
                 right_power: None,
+                ground_contact_time: None,
+                vertical_oscillation: None,
+                stride_length: None,
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: None,
+                sport_transition: None,
             },
             DataPoint {
                 timestamp: 60,
@@ -453,6 +497,13 @@ mod tests {
                 distance: Some(dec!(230.0)),
                 left_power: None,
                 right_power: None,
+                ground_contact_time: None,
+                vertical_oscillation: None,
+                stride_length: None,
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: None,
+                sport_transition: None,
             },
         ];
 
@@ -633,6 +684,13 @@ mod tests {
                 distance: Some(dec!(0.0)),
                 left_power: Some(75),
                 right_power: Some(75),
+            ground_contact_time: None,
+            vertical_oscillation: None,
+            stride_length: None,
+            stroke_count: None,
+            stroke_type: None,
+            lap_number: None,
+            sport_transition: None,
             }]),
             summary: WorkoutSummary {
                 avg_heart_rate: Some(155),
