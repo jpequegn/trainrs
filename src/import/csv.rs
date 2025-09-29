@@ -307,6 +307,13 @@ impl ImportFormat for CsvImporter {
                 distance: None,
                 left_power: None,
                 right_power: None,
+                ground_contact_time: None,
+                vertical_oscillation: None,
+                stride_length: None,
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: None,
+                sport_transition: None,
             };
 
             // Parse each field based on column mapping

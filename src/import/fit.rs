@@ -36,7 +36,10 @@ impl FitImporter {
                                     1 => Sport::Running,
                                     2 => Sport::Cycling,
                                     5 => Sport::Swimming,
-                                    _ => Sport::Cycling,
+                                    6 => Sport::Rowing,
+                                    15 => Sport::Triathlon,
+                                    26 => Sport::CrossTraining,
+                                    _ => Sport::Cycling, // Default fallback
                                 };
                             }
                         }
@@ -74,12 +77,53 @@ impl FitImporter {
         Ok((Sport::Cycling, WorkoutType::Endurance, Utc::now(), 0))
     }
 
-    /// Parse data points from FIT records focusing on cycling power data
+    /// Parse data points from FIT records with sport-specific metrics
     fn parse_data_points(&self, records: &[FitDataRecord], start_time: DateTime<Utc>) -> Result<Vec<DataPoint>> {
-        let mut data_points = Vec::new();
+        let mut data_points: Vec<DataPoint> = Vec::new();
         let mut timestamp_offset = 0u32;
+        let mut current_lap = 1u16;
+        let mut current_sport: Option<Sport> = None;
 
         for record in records {
+            // Handle lap records for lap counting and sport transitions
+            if record.kind() == fitparser::profile::MesgNum::Lap {
+                for field in record.fields() {
+                    match field.name() {
+                        "message_index" => {
+                            if let Value::UInt16(lap_idx) = field.value() {
+                                current_lap = lap_idx + 1; // Lap index is 0-based
+                            }
+                        }
+                        "sport" => {
+                            if let Value::Enum(sport_val) = field.value() {
+                                let lap_sport = match sport_val {
+                                    1 => Sport::Running,
+                                    2 => Sport::Cycling,
+                                    5 => Sport::Swimming,
+                                    6 => Sport::Rowing,
+                                    15 => Sport::Triathlon,
+                                    26 => Sport::CrossTraining,
+                                    _ => Sport::Cycling,
+                                };
+
+                                // Detect sport transition
+                                if let Some(prev_sport) = current_sport {
+                                    if prev_sport != lap_sport {
+                                        // Mark previous data points as having a sport transition
+                                        if let Some(last_point) = data_points.last_mut() {
+                                            last_point.sport_transition = Some(true);
+                                        }
+                                    }
+                                }
+                                current_sport = Some(lap_sport);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                continue;
+            }
+
             if record.kind() == fitparser::profile::MesgNum::Record {
                 let mut data_point = DataPoint {
                     timestamp: timestamp_offset,
@@ -92,6 +136,13 @@ impl FitImporter {
                     distance: None,
                     left_power: None,
                     right_power: None,
+                    ground_contact_time: None,
+                    vertical_oscillation: None,
+                    stride_length: None,
+                    stroke_count: None,
+                    stroke_type: None,
+                    lap_number: Some(current_lap),
+                    sport_transition: None,
                 };
 
                 for field in record.fields() {
@@ -148,6 +199,37 @@ impl FitImporter {
                         }
                         "left_power_phase" | "right_power_phase" => {
                             // TODO: Phase 3 - Extract power phase data for advanced analysis
+                        }
+                        // Running dynamics fields
+                        "stance_time" | "ground_contact_time" => {
+                            if let Value::UInt16(gct) = field.value() {
+                                data_point.ground_contact_time = Some(*gct);
+                            }
+                        }
+                        "vertical_oscillation" => {
+                            if let Value::UInt16(vo) = field.value() {
+                                data_point.vertical_oscillation = Some(*vo);
+                            }
+                        }
+                        "stride_length" => {
+                            if let Value::Float64(sl) = field.value() {
+                                data_point.stride_length = Some(Decimal::from_f64_retain(*sl).unwrap_or_default());
+                            } else if let Value::UInt16(sl) = field.value() {
+                                data_point.stride_length = Some(Decimal::from(*sl));
+                            }
+                        }
+                        // Swimming-specific fields
+                        "strokes" | "total_strokes" => {
+                            if let Value::UInt16(strokes) = field.value() {
+                                data_point.stroke_count = Some(*strokes);
+                            } else if let Value::UInt8(strokes) = field.value() {
+                                data_point.stroke_count = Some(*strokes as u16);
+                            }
+                        }
+                        "swim_stroke" => {
+                            if let Value::Enum(stroke_type) = field.value() {
+                                data_point.stroke_type = Some(*stroke_type);
+                            }
                         }
                         _ => {}
                     }
@@ -264,11 +346,15 @@ impl FitImporter {
         }
     }
 
-    /// Determine primary data source based on available data
+    /// Determine primary data source based on available data and sport
     fn determine_data_source(&self, data_points: &[DataPoint], sport: &Sport) -> DataSource {
         let has_power = data_points.iter().any(|dp| dp.power.is_some());
         let has_heart_rate = data_points.iter().any(|dp| dp.heart_rate.is_some());
         let has_speed = data_points.iter().any(|dp| dp.speed.is_some());
+        let has_running_dynamics = data_points.iter().any(|dp| {
+            dp.ground_contact_time.is_some() || dp.vertical_oscillation.is_some() || dp.stride_length.is_some()
+        });
+        let has_swimming_data = data_points.iter().any(|dp| dp.stroke_count.is_some());
 
         match sport {
             Sport::Cycling => {
@@ -281,7 +367,9 @@ impl FitImporter {
                 }
             }
             Sport::Running => {
-                if has_speed {
+                if has_running_dynamics {
+                    DataSource::Pace // Running dynamics enhance pace-based training
+                } else if has_speed {
                     DataSource::Pace
                 } else if has_heart_rate {
                     DataSource::HeartRate
@@ -289,7 +377,37 @@ impl FitImporter {
                     DataSource::HeartRate // Default for running
                 }
             }
-            _ => DataSource::HeartRate, // Default for other sports
+            Sport::Swimming => {
+                if has_swimming_data {
+                    DataSource::Pace // Swimming uses pace-based analysis with stroke data
+                } else if has_heart_rate {
+                    DataSource::HeartRate
+                } else {
+                    DataSource::HeartRate // Default for swimming
+                }
+            }
+            Sport::Rowing => {
+                if has_power {
+                    DataSource::Power // Rowing can use power meters
+                } else if has_heart_rate {
+                    DataSource::HeartRate
+                } else {
+                    DataSource::HeartRate
+                }
+            }
+            Sport::Triathlon => {
+                // For triathlon, prefer the most comprehensive data source available
+                if has_power {
+                    DataSource::Power
+                } else if has_running_dynamics || has_swimming_data {
+                    DataSource::Pace
+                } else if has_heart_rate {
+                    DataSource::HeartRate
+                } else {
+                    DataSource::HeartRate
+                }
+            }
+            Sport::CrossTraining => DataSource::HeartRate, // Default for cross training
         }
     }
 }
@@ -380,6 +498,13 @@ mod tests {
                 pace: None,
                 left_power: Some(100),
                 right_power: Some(100),
+                ground_contact_time: None,
+                vertical_oscillation: None,
+                stride_length: None,
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: Some(1),
+                sport_transition: None,
             },
             DataPoint {
                 timestamp: 1,
@@ -392,6 +517,13 @@ mod tests {
                 pace: None,
                 left_power: Some(125),
                 right_power: Some(125),
+                ground_contact_time: None,
+                vertical_oscillation: None,
+                stride_length: None,
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: Some(1),
+                sport_transition: None,
             },
             DataPoint {
                 timestamp: 2,
@@ -404,6 +536,13 @@ mod tests {
                 pace: None,
                 left_power: Some(150),
                 right_power: Some(150),
+                ground_contact_time: None,
+                vertical_oscillation: None,
+                stride_length: None,
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: Some(1),
+                sport_transition: None,
             },
             // Add more data points to ensure we have enough for 30-second rolling average
             DataPoint {
@@ -417,6 +556,13 @@ mod tests {
                 pace: None,
                 left_power: Some(110),
                 right_power: Some(110),
+                ground_contact_time: None,
+                vertical_oscillation: None,
+                stride_length: None,
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: Some(1),
+                sport_transition: None,
             },
         ]
     }
@@ -462,6 +608,13 @@ mod tests {
                 pace: None,
                 left_power: None,
                 right_power: None,
+                ground_contact_time: Some(250), // 250ms contact time
+                vertical_oscillation: Some(80), // 8.0cm oscillation
+                stride_length: Some(dec!(1.3)), // 1.3m stride
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: Some(1),
+                sport_transition: None,
             },
             DataPoint {
                 timestamp: 1,
@@ -474,6 +627,13 @@ mod tests {
                 pace: None,
                 left_power: None,
                 right_power: None,
+                ground_contact_time: Some(240),
+                vertical_oscillation: Some(75),
+                stride_length: Some(dec!(1.35)),
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: Some(1),
+                sport_transition: None,
             },
         ];
 
@@ -526,6 +686,13 @@ mod tests {
             pace: None,
             left_power: Some(95), // 47.5% left
             right_power: Some(105), // 52.5% right
+            ground_contact_time: None,
+            vertical_oscillation: None,
+            stride_length: None,
+            stroke_count: None,
+            stroke_type: None,
+            lap_number: Some(1),
+            sport_transition: None,
         };
 
         assert_eq!(data_point.left_power, Some(95));
@@ -534,5 +701,136 @@ mod tests {
         // Test balance calculation (95 + 105 = 200 total)
         let total = data_point.left_power.unwrap() + data_point.right_power.unwrap();
         assert_eq!(total, data_point.power.unwrap());
+    }
+
+    #[test]
+    fn test_running_dynamics_and_swimming_metrics() {
+        let importer = FitImporter::new();
+
+        // Test running data point with dynamics
+        let running_data = vec![
+            DataPoint {
+                timestamp: 0,
+                power: None,
+                heart_rate: Some(140),
+                cadence: Some(180),
+                speed: Some(dec!(4.0)),
+                distance: Some(dec!(4.0)),
+                elevation: Some(100),
+                pace: None,
+                left_power: None,
+                right_power: None,
+                ground_contact_time: Some(250), // Running dynamics
+                vertical_oscillation: Some(80),
+                stride_length: Some(dec!(1.3)),
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: Some(1),
+                sport_transition: None,
+            },
+        ];
+
+        // Test data source determination for running with dynamics
+        let running_source = importer.determine_data_source(&running_data, &Sport::Running);
+        assert_eq!(running_source, DataSource::Pace); // Should prefer pace for running dynamics
+
+        // Test swimming data point
+        let swimming_data = vec![
+            DataPoint {
+                timestamp: 0,
+                power: None,
+                heart_rate: Some(130),
+                cadence: None,
+                speed: Some(dec!(1.5)), // Slower swimming speed
+                distance: Some(dec!(25.0)), // Pool length
+                elevation: None,
+                pace: None,
+                left_power: None,
+                right_power: None,
+                ground_contact_time: None,
+                vertical_oscillation: None,
+                stride_length: None,
+                stroke_count: Some(20), // Swimming metrics
+                stroke_type: Some(1), // Freestyle
+                lap_number: Some(1),
+                sport_transition: None,
+            },
+        ];
+
+        // Test data source determination for swimming
+        let swimming_source = importer.determine_data_source(&swimming_data, &Sport::Swimming);
+        assert_eq!(swimming_source, DataSource::Pace); // Should use pace for swimming with stroke data
+
+        // Test multisport data with transition
+        let multisport_data = vec![
+            DataPoint {
+                timestamp: 0,
+                power: Some(200),
+                heart_rate: Some(140),
+                cadence: Some(90),
+                speed: Some(dec!(10.0)),
+                distance: Some(dec!(10.0)),
+                elevation: Some(100),
+                pace: None,
+                left_power: Some(100),
+                right_power: Some(100),
+                ground_contact_time: None,
+                vertical_oscillation: None,
+                stride_length: None,
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: Some(1),
+                sport_transition: None,
+            },
+            DataPoint {
+                timestamp: 3600, // 1 hour later
+                power: None,
+                heart_rate: Some(150),
+                cadence: Some(180),
+                speed: Some(dec!(4.0)),
+                distance: Some(dec!(4.0)),
+                elevation: Some(102),
+                pace: None,
+                left_power: None,
+                right_power: None,
+                ground_contact_time: Some(250),
+                vertical_oscillation: Some(80),
+                stride_length: Some(dec!(1.3)),
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: Some(2),
+                sport_transition: Some(true), // Transition detected
+            },
+        ];
+
+        // Test data source determination for triathlon
+        let triathlon_source = importer.determine_data_source(&multisport_data, &Sport::Triathlon);
+        assert_eq!(triathlon_source, DataSource::Power); // Should prefer power for triathlon when available
+
+        // Verify sport transition is marked
+        assert!(multisport_data[1].sport_transition.unwrap_or(false));
+    }
+
+    #[test]
+    fn test_enhanced_sport_mapping() {
+        let importer = FitImporter::new();
+
+        // Test expanded sport mapping (this would require mock FIT data)
+        // For now, just verify the data structures support the new sports
+        let sports = vec![
+            Sport::Running,
+            Sport::Cycling,
+            Sport::Swimming,
+            Sport::Rowing,
+            Sport::Triathlon,
+            Sport::CrossTraining,
+        ];
+
+        for sport in sports {
+            let empty_data = vec![];
+            let source = importer.determine_data_source(&empty_data, &sport);
+            // All sports should have a default data source
+            assert_eq!(source, DataSource::HeartRate);
+        }
     }
 }

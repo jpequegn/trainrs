@@ -12,6 +12,7 @@ pub mod performance;
 pub mod pmc;
 pub mod power;
 pub mod running;
+pub mod swimming;
 pub mod training_plan;
 pub mod tss;
 pub mod zones;
