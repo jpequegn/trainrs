@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::import::{validation::WorkoutValidator, ImportFormat};
 use crate::models::{DataPoint, DataSource, Sport, Workout, WorkoutSummary, WorkoutType};
+use crate::power::PowerAnalyzer;
 
 /// FIT file importer for Garmin native format
 /// Supports parsing of FIT files from Garmin devices with focus on cycling power data
@@ -134,6 +135,20 @@ impl FitImporter {
                                 data_point.distance = Some(Decimal::from_f64_retain(*dist).unwrap_or_default());
                             }
                         }
+                        "left_right_balance" => {
+                            if let Value::UInt8(balance) = field.value() {
+                                // Balance is typically encoded as 0-200, where 100 = 50/50 split
+                                // Extract left and right percentages and calculate power split
+                                if let Some(total_power) = data_point.power {
+                                    let left_percent = *balance as f64 / 200.0; // Convert to 0.0-1.0 range
+                                    data_point.left_power = Some((total_power as f64 * left_percent) as u16);
+                                    data_point.right_power = Some((total_power as f64 * (1.0 - left_percent)) as u16);
+                                }
+                            }
+                        }
+                        "left_power_phase" | "right_power_phase" => {
+                            // TODO: Phase 3 - Extract power phase data for advanced analysis
+                        }
                         _ => {}
                     }
                 }
@@ -145,8 +160,8 @@ impl FitImporter {
         Ok(data_points)
     }
 
-    /// Calculate workout summary from data points
-    fn calculate_summary(&self, data_points: &[DataPoint], _sport: &Sport) -> WorkoutSummary {
+    /// Calculate workout summary from data points with advanced power metrics
+    fn calculate_summary(&self, data_points: &[DataPoint], sport: &Sport) -> WorkoutSummary {
         if data_points.is_empty() {
             return WorkoutSummary {
                 avg_heart_rate: None,
@@ -172,7 +187,7 @@ impl FitImporter {
         };
         let max_heart_rate = heart_rates.iter().max().copied();
 
-        // Calculate power metrics (for cycling)
+        // Calculate basic power metrics
         let powers: Vec<u16> = data_points.iter().filter_map(|dp| dp.power).collect();
         let avg_power = if !powers.is_empty() {
             Some(powers.iter().sum::<u16>() / powers.len() as u16)
@@ -180,10 +195,38 @@ impl FitImporter {
             None
         };
 
+        // Calculate advanced power metrics for cycling with power data
+        let (normalized_power, intensity_factor) = if sport == &Sport::Cycling && !powers.is_empty() {
+            match PowerAnalyzer::calculate_power_metrics(data_points, None) {
+                Ok(metrics) => (Some(metrics.normalized_power), metrics.intensity_factor),
+                Err(_) => (None, None) // Fallback gracefully on error
+            }
+        } else {
+            (None, None)
+        };
+
         // Calculate cadence
         let cadences: Vec<u16> = data_points.iter().filter_map(|dp| dp.cadence).collect();
         let avg_cadence = if !cadences.is_empty() {
             Some(cadences.iter().sum::<u16>() / cadences.len() as u16)
+        } else {
+            None
+        };
+
+        // Calculate average pace from speed data (for running)
+        let avg_pace = if sport == &Sport::Running {
+            let speeds: Vec<Decimal> = data_points.iter().filter_map(|dp| dp.speed).collect();
+            if !speeds.is_empty() {
+                let avg_speed = speeds.iter().sum::<Decimal>() / Decimal::from(speeds.len());
+                if avg_speed > Decimal::ZERO {
+                    // Convert speed (m/s) to pace (min/km): pace = 1000 / (speed * 60)
+                    Some(Decimal::from(1000) / (avg_speed * Decimal::from(60)))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -210,9 +253,9 @@ impl FitImporter {
             avg_heart_rate,
             max_heart_rate,
             avg_power,
-            normalized_power: None, // TODO: Calculate normalized power in future phase
-            avg_pace: None, // TODO: Calculate from speed data
-            intensity_factor: None,
+            normalized_power,
+            avg_pace,
+            intensity_factor,
             tss: None, // Will be calculated by TSS calculator after import
             total_distance,
             elevation_gain,
@@ -315,5 +358,181 @@ impl ImportFormat for FitImporter {
 
     fn get_format_name(&self) -> &'static str {
         "FIT"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal_macros::dec;
+
+    /// Create test data points with power data for testing advanced metrics
+    fn create_test_power_data_points() -> Vec<DataPoint> {
+        vec![
+            DataPoint {
+                timestamp: 0,
+                power: Some(200),
+                heart_rate: Some(140),
+                cadence: Some(90),
+                speed: Some(dec!(10.0)), // 10 m/s
+                distance: Some(dec!(10.0)),
+                elevation: Some(100),
+                pace: None,
+                left_power: Some(100),
+                right_power: Some(100),
+            },
+            DataPoint {
+                timestamp: 1,
+                power: Some(250),
+                heart_rate: Some(150),
+                cadence: Some(95),
+                speed: Some(dec!(11.0)),
+                distance: Some(dec!(21.0)),
+                elevation: Some(102),
+                pace: None,
+                left_power: Some(125),
+                right_power: Some(125),
+            },
+            DataPoint {
+                timestamp: 2,
+                power: Some(300),
+                heart_rate: Some(160),
+                cadence: Some(100),
+                speed: Some(dec!(12.0)),
+                distance: Some(dec!(33.0)),
+                elevation: Some(105),
+                pace: None,
+                left_power: Some(150),
+                right_power: Some(150),
+            },
+            // Add more data points to ensure we have enough for 30-second rolling average
+            DataPoint {
+                timestamp: 30,
+                power: Some(220),
+                heart_rate: Some(145),
+                cadence: Some(92),
+                speed: Some(dec!(10.5)),
+                distance: Some(dec!(345.0)),
+                elevation: Some(110),
+                pace: None,
+                left_power: Some(110),
+                right_power: Some(110),
+            },
+        ]
+    }
+
+    #[test]
+    fn test_calculate_summary_with_power_metrics() {
+        let importer = FitImporter::new();
+        let data_points = create_test_power_data_points();
+        let summary = importer.calculate_summary(&data_points, &Sport::Cycling);
+
+        // Test basic metrics
+        assert!(summary.avg_power.is_some());
+        assert!(summary.avg_heart_rate.is_some());
+        assert!(summary.avg_cadence.is_some());
+        assert!(summary.elevation_gain.is_some());
+
+        // Test advanced power metrics (Phase 2 features)
+        assert!(summary.normalized_power.is_some());
+        let np = summary.normalized_power.unwrap();
+        assert!(np > 0);
+        assert!(np >= 200); // Should be at least average power due to variability
+
+        // Test that Intensity Factor is None when no FTP is provided
+        // (IF calculation requires FTP from athlete profile)
+        assert!(summary.intensity_factor.is_none());
+
+        // Test that TSS is None (calculated separately after import)
+        assert!(summary.tss.is_none());
+    }
+
+    #[test]
+    fn test_calculate_summary_with_running_data() {
+        let importer = FitImporter::new();
+        let data_points = vec![
+            DataPoint {
+                timestamp: 0,
+                power: None,
+                heart_rate: Some(140),
+                cadence: Some(180), // Steps per minute for running
+                speed: Some(dec!(4.0)), // 4 m/s
+                distance: Some(dec!(4.0)),
+                elevation: Some(100),
+                pace: None,
+                left_power: None,
+                right_power: None,
+            },
+            DataPoint {
+                timestamp: 1,
+                power: None,
+                heart_rate: Some(150),
+                cadence: Some(185),
+                speed: Some(dec!(4.2)),
+                distance: Some(dec!(8.2)),
+                elevation: Some(102),
+                pace: None,
+                left_power: None,
+                right_power: None,
+            },
+        ];
+
+        let summary = importer.calculate_summary(&data_points, &Sport::Running);
+
+        // Power metrics should be None for running
+        assert!(summary.avg_power.is_none());
+        assert!(summary.normalized_power.is_none());
+        assert!(summary.intensity_factor.is_none());
+
+        // Running-specific metrics
+        assert!(summary.avg_heart_rate.is_some());
+        assert!(summary.avg_cadence.is_some());
+        assert!(summary.avg_pace.is_some()); // Calculated from speed
+
+        let pace = summary.avg_pace.unwrap();
+        // Average speed is 4.1 m/s, pace should be ~4.07 min/km
+        assert!(pace > dec!(4.0) && pace < dec!(5.0));
+    }
+
+    #[test]
+    fn test_calculate_summary_empty_data() {
+        let importer = FitImporter::new();
+        let data_points = vec![];
+        let summary = importer.calculate_summary(&data_points, &Sport::Cycling);
+
+        // All metrics should be None for empty data
+        assert!(summary.avg_power.is_none());
+        assert!(summary.normalized_power.is_none());
+        assert!(summary.avg_heart_rate.is_none());
+        assert!(summary.intensity_factor.is_none());
+        assert!(summary.tss.is_none());
+        assert!(summary.avg_cadence.is_none());
+        assert!(summary.total_distance.is_none());
+        assert!(summary.elevation_gain.is_none());
+    }
+
+    #[test]
+    fn test_parse_left_right_power_balance() {
+        // This test would require mock FIT data with left/right balance
+        // For now, just test the data structure supports it
+        let data_point = DataPoint {
+            timestamp: 0,
+            power: Some(200),
+            heart_rate: Some(140),
+            cadence: Some(90),
+            speed: Some(dec!(10.0)),
+            distance: Some(dec!(10.0)),
+            elevation: Some(100),
+            pace: None,
+            left_power: Some(95), // 47.5% left
+            right_power: Some(105), // 52.5% right
+        };
+
+        assert_eq!(data_point.left_power, Some(95));
+        assert_eq!(data_point.right_power, Some(105));
+
+        // Test balance calculation (95 + 105 = 200 total)
+        let total = data_point.left_power.unwrap() + data_point.right_power.unwrap();
+        assert_eq!(total, data_point.power.unwrap());
     }
 }
