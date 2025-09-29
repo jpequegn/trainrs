@@ -19,10 +19,13 @@ pub enum PowerError {
     #[error("Insufficient data: {0}")]
     InsufficientData(String),
     #[error("Invalid data: {0}")]
+    #[allow(dead_code)]
     InvalidData(String),
     #[error("Calculation error: {0}")]
+    #[allow(dead_code)]
     CalculationError(String),
     #[error("Model fitting error: {0}")]
+    #[allow(dead_code)]
     ModelFittingError(String),
 }
 
@@ -554,6 +557,13 @@ mod tests {
                 distance: Some(rust_decimal::Decimal::from(i * 10)),
                 left_power: Some(power / 2),
                 right_power: Some(power / 2),
+                ground_contact_time: None,
+                vertical_oscillation: None,
+                stride_length: None,
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: None,
+                sport_transition: None,
             });
         }
         data
