@@ -105,10 +105,12 @@ pub enum ExportError {
     #[error("Serialization error: {0}")]
     SerializationError(String),
     #[error("Date parsing error: {0}")]
+    #[allow(dead_code)]
     DateParseError(String),
     #[error("Insufficient data: {0}")]
     InsufficientData(String),
     #[error("Configuration error: {0}")]
+    #[allow(dead_code)]
     ConfigurationError(String),
     #[error("PMC calculation error: {0}")]
     PmcError(#[from] crate::pmc::PmcError),

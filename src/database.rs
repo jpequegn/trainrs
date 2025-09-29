@@ -235,7 +235,7 @@ impl Database {
         let tx = self.conn.transaction()?;
 
         // Check for duplicates
-        if Self::is_duplicate_workout(&tx, &workout)? {
+        if Self::is_duplicate_workout(&tx, workout)? {
             return Err(DatabaseError::Duplicate(format!(
                 "Duplicate workout found: {} on {}",
                 workout.sport.to_string(),
@@ -322,7 +322,7 @@ impl Database {
                 workout.duration_seconds,
                 sport_str,
             ],
-            |row| Ok(row.get(0)?),
+            |row| row.get(0),
         )?;
 
         Ok(count > 0)
@@ -496,19 +496,19 @@ impl Database {
         let workout_count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM workouts",
             [],
-            |row| Ok(row.get(0)?),
+            |row| row.get(0),
         )?;
 
         let athlete_count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM athletes",
             [],
-            |row| Ok(row.get(0)?),
+            |row| row.get(0),
         )?;
 
         let time_series_count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM time_series_data",
             [],
-            |row| Ok(row.get(0)?),
+            |row| row.get(0),
         )?;
 
         let (total_original_size, total_compressed_size): (i64, i64) = self.conn.query_row(
@@ -579,7 +579,7 @@ impl Database {
             )?;
 
             let ids: Vec<String> = stmt.query_map([], |row| {
-                Ok(row.get::<_, String>(0)?)
+                row.get::<_, String>(0)
             })?.collect::<Result<Vec<_>, _>>()?;
 
             ids
