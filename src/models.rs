@@ -832,3 +832,52 @@ impl TrainingZones {
             .map(|zones| crate::zones::ZoneCalculator::get_pace_zone(pace, zones))
     }
 }
+
+/// Developer field definition from FIT files
+/// Defines custom metrics from third-party apps (ANT+, Connect IQ)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeveloperField {
+    /// Developer data index (links to DeveloperDataId)
+    pub developer_data_id: u8,
+    /// Field definition number within developer namespace
+    pub field_definition_number: u8,
+    /// Human-readable field name
+    pub field_name: String,
+    /// FIT base type ID (defines data type)
+    pub fit_base_type_id: u8,
+    /// Units of measurement (e.g., "watts", "bpm", "ms")
+    pub units: Option<String>,
+    /// Scale factor for converting raw values
+    pub scale: Option<f64>,
+    /// Offset for converting raw values
+    pub offset: Option<f64>,
+}
+
+/// Developer data identifier mapping to application UUID
+/// Links developer fields to their source application
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeveloperDataId {
+    /// Developer data index (used in field definitions)
+    pub developer_data_id: u8,
+    /// Application UUID (16 bytes)
+    pub application_id: [u8; 16],
+    /// Manufacturer ID (optional)
+    pub manufacturer_id: Option<u16>,
+    /// Developer data index within app (optional)
+    pub developer_data_index: Option<u8>,
+}
+
+impl DeveloperField {
+    /// Apply scale and offset to convert raw value to physical value
+    pub fn apply_conversion(&self, raw_value: f64) -> f64 {
+        let scaled = raw_value / self.scale.unwrap_or(1.0);
+        scaled - self.offset.unwrap_or(0.0)
+    }
+}
+
+impl DeveloperDataId {
+    /// Get application UUID as a formatted string
+    pub fn application_uuid_string(&self) -> String {
+        uuid::Uuid::from_bytes(self.application_id).to_string()
+    }
+}
