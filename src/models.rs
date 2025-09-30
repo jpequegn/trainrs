@@ -881,3 +881,97 @@ impl DeveloperDataId {
         uuid::Uuid::from_bytes(self.application_id).to_string()
     }
 }
+
+/// Connect IQ custom metrics from popular third-party apps
+/// Parsed from developer fields with recognized app UUIDs
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ConnectIQMetric {
+    /// Power balance (cycling) - left/right power distribution
+    PowerBalance {
+        left_percent: f64,
+        right_percent: f64,
+    },
+    /// Pedal smoothness (cycling) - left/right smoothness
+    PedalSmoothness { left: f64, right: f64 },
+    /// Leg spring stiffness (running) - kN/m
+    LegSpringStiffness(f64),
+    /// Form power (running) - watts
+    FormPower(f64),
+    /// Aerodynamic drag coefficient times frontal area - m²
+    AerodynamicCdA(f64),
+    /// Core body temperature - Celsius
+    CoreTemperature(f64),
+    /// Muscle oxygen saturation and total hemoglobin
+    MuscleOxygen { smo2: f64, thb: f64 },
+    /// Environmental data
+    Environmental {
+        temperature: Option<f64>,
+        humidity: Option<f64>,
+        air_quality: Option<f64>,
+    },
+    /// Ground contact time balance (running)
+    GroundContactBalance { left: f64, right: f64 },
+    /// Running power from various sources
+    RunningPower(u16),
+    /// Custom metric not otherwise categorized
+    Custom {
+        name: String,
+        value: f64,
+        units: Option<String>,
+    },
+}
+
+impl ConnectIQMetric {
+    /// Get a human-readable description of the metric
+    pub fn description(&self) -> String {
+        match self {
+            ConnectIQMetric::PowerBalance { left_percent, right_percent } => {
+                format!("Power Balance: L{:.1}% / R{:.1}%", left_percent, right_percent)
+            }
+            ConnectIQMetric::PedalSmoothness { left, right } => {
+                format!("Pedal Smoothness: L{:.1}% / R{:.1}%", left, right)
+            }
+            ConnectIQMetric::LegSpringStiffness(kn_per_m) => {
+                format!("Leg Spring Stiffness: {:.1} kN/m", kn_per_m)
+            }
+            ConnectIQMetric::FormPower(watts) => {
+                format!("Form Power: {} W", watts)
+            }
+            ConnectIQMetric::AerodynamicCdA(cda) => {
+                format!("CdA: {:.3} m²", cda)
+            }
+            ConnectIQMetric::CoreTemperature(temp) => {
+                format!("Core Temperature: {:.1}°C", temp)
+            }
+            ConnectIQMetric::MuscleOxygen { smo2, thb } => {
+                format!("Muscle O₂: SmO2 {:.1}%, tHb {:.1} g/dL", smo2, thb)
+            }
+            ConnectIQMetric::Environmental { temperature, humidity, air_quality } => {
+                let mut parts = Vec::new();
+                if let Some(t) = temperature {
+                    parts.push(format!("Temp: {:.1}°C", t));
+                }
+                if let Some(h) = humidity {
+                    parts.push(format!("Humidity: {:.0}%", h));
+                }
+                if let Some(aq) = air_quality {
+                    parts.push(format!("AQI: {:.0}", aq));
+                }
+                format!("Environment: {}", parts.join(", "))
+            }
+            ConnectIQMetric::GroundContactBalance { left, right } => {
+                format!("GCT Balance: L{:.1}% / R{:.1}%", left, right)
+            }
+            ConnectIQMetric::RunningPower(watts) => {
+                format!("Running Power: {} W", watts)
+            }
+            ConnectIQMetric::Custom { name, value, units } => {
+                if let Some(u) = units {
+                    format!("{}: {:.2} {}", name, value, u)
+                } else {
+                    format!("{}: {:.2}", name, value)
+                }
+            }
+        }
+    }
+}

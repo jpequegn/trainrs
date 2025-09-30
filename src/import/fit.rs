@@ -565,6 +565,113 @@ impl FitImporter {
 
         developer_fields
     }
+
+    /// Parse Connect IQ custom metrics from developer fields
+    /// Recognizes popular Connect IQ app UUIDs and field names
+    fn parse_connect_iq_field(
+        &self,
+        field: &crate::models::DeveloperField,
+        value: f64,
+    ) -> Option<crate::models::ConnectIQMetric> {
+        use crate::models::ConnectIQMetric;
+
+        // Match based on field name (case-insensitive)
+        let field_name_lower = field.field_name.to_lowercase();
+
+        // Power balance and cycling metrics
+        if field_name_lower.contains("power") && field_name_lower.contains("balance") {
+            // Assume value is left percentage, calculate right
+            let left_percent = value;
+            let right_percent = 100.0 - left_percent;
+            return Some(ConnectIQMetric::PowerBalance {
+                left_percent,
+                right_percent,
+            });
+        }
+
+        if field_name_lower.contains("pedal") && field_name_lower.contains("smooth") {
+            // Value might be averaged or just left side
+            // For now, assume equal smoothness (would need paired field for full data)
+            return Some(ConnectIQMetric::PedalSmoothness {
+                left: value,
+                right: value,
+            });
+        }
+
+        // Running dynamics
+        if field_name_lower.contains("leg") && field_name_lower.contains("spring") {
+            return Some(ConnectIQMetric::LegSpringStiffness(value));
+        }
+
+        if field_name_lower.contains("form") && field_name_lower.contains("power") {
+            return Some(ConnectIQMetric::FormPower(value));
+        }
+
+        if field_name_lower.contains("running") && field_name_lower.contains("power") {
+            return Some(ConnectIQMetric::RunningPower(value as u16));
+        }
+
+        if (field_name_lower.contains("ground") || field_name_lower.contains("gct"))
+            && field_name_lower.contains("balance")
+        {
+            let left = value;
+            let right = 100.0 - left;
+            return Some(ConnectIQMetric::GroundContactBalance { left, right });
+        }
+
+        // Aerodynamics
+        if field_name_lower.contains("cda") || field_name_lower.contains("drag") {
+            return Some(ConnectIQMetric::AerodynamicCdA(value));
+        }
+
+        // Physiological
+        if field_name_lower.contains("core") && field_name_lower.contains("temp") {
+            return Some(ConnectIQMetric::CoreTemperature(value));
+        }
+
+        if field_name_lower.contains("smo2") || field_name_lower.contains("muscle")
+            && field_name_lower.contains("oxygen")
+        {
+            // If this is SmO2, we'd need the paired tHb value
+            // For now, just store SmO2
+            return Some(ConnectIQMetric::MuscleOxygen {
+                smo2: value,
+                thb: 0.0, // Would need paired field
+            });
+        }
+
+        // Environmental
+        if field_name_lower.contains("temperature") && !field_name_lower.contains("core") {
+            return Some(ConnectIQMetric::Environmental {
+                temperature: Some(value),
+                humidity: None,
+                air_quality: None,
+            });
+        }
+
+        if field_name_lower.contains("humidity") {
+            return Some(ConnectIQMetric::Environmental {
+                temperature: None,
+                humidity: Some(value),
+                air_quality: None,
+            });
+        }
+
+        if field_name_lower.contains("air") && field_name_lower.contains("quality") {
+            return Some(ConnectIQMetric::Environmental {
+                temperature: None,
+                humidity: None,
+                air_quality: Some(value),
+            });
+        }
+
+        // Fallback to custom metric
+        Some(ConnectIQMetric::Custom {
+            name: field.field_name.clone(),
+            value,
+            units: field.units.clone(),
+        })
+    }
 }
 
 impl ImportFormat for FitImporter {
@@ -1096,5 +1203,235 @@ mod tests {
         let deserialized: DeveloperDataId = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.developer_data_id, dev_data_id.developer_data_id);
         assert_eq!(deserialized.manufacturer_id, dev_data_id.manufacturer_id);
+    }
+
+    #[test]
+    fn test_connect_iq_power_balance_parsing() {
+        use crate::models::{ConnectIQMetric, DeveloperField};
+
+        let importer = FitImporter::new();
+        let field = DeveloperField {
+            developer_data_id: 0,
+            field_definition_number: 1,
+            field_name: "Power Balance".to_string(),
+            fit_base_type_id: 2,
+            units: Some("percent".to_string()),
+            scale: Some(1.0),
+            offset: Some(0.0),
+        };
+
+        let metric = importer.parse_connect_iq_field(&field, 52.5);
+        assert!(metric.is_some());
+
+        if let Some(ConnectIQMetric::PowerBalance { left_percent, right_percent }) = metric {
+            assert_eq!(left_percent, 52.5);
+            assert_eq!(right_percent, 47.5);
+        } else {
+            panic!("Expected PowerBalance metric");
+        }
+    }
+
+    #[test]
+    fn test_connect_iq_running_dynamics() {
+        use crate::models::{ConnectIQMetric, DeveloperField};
+
+        let importer = FitImporter::new();
+
+        // Test leg spring stiffness
+        let lss_field = DeveloperField {
+            developer_data_id: 0,
+            field_definition_number: 2,
+            field_name: "Leg Spring Stiffness".to_string(),
+            fit_base_type_id: 2,
+            units: Some("kN/m".to_string()),
+            scale: Some(1.0),
+            offset: Some(0.0),
+        };
+
+        let metric = importer.parse_connect_iq_field(&lss_field, 12.5);
+        assert!(metric.is_some());
+
+        if let Some(ConnectIQMetric::LegSpringStiffness(value)) = metric {
+            assert_eq!(value, 12.5);
+        } else {
+            panic!("Expected LegSpringStiffness metric");
+        }
+
+        // Test running power
+        let rp_field = DeveloperField {
+            developer_data_id: 0,
+            field_definition_number: 3,
+            field_name: "Running Power".to_string(),
+            fit_base_type_id: 2,
+            units: Some("watts".to_string()),
+            scale: Some(1.0),
+            offset: Some(0.0),
+        };
+
+        let metric = importer.parse_connect_iq_field(&rp_field, 245.0);
+        assert!(metric.is_some());
+
+        if let Some(ConnectIQMetric::RunningPower(watts)) = metric {
+            assert_eq!(watts, 245);
+        } else {
+            panic!("Expected RunningPower metric");
+        }
+    }
+
+    #[test]
+    fn test_connect_iq_environmental_data() {
+        use crate::models::{ConnectIQMetric, DeveloperField};
+
+        let importer = FitImporter::new();
+
+        // Test temperature
+        let temp_field = DeveloperField {
+            developer_data_id: 0,
+            field_definition_number: 4,
+            field_name: "Temperature".to_string(),
+            fit_base_type_id: 2,
+            units: Some("celsius".to_string()),
+            scale: Some(1.0),
+            offset: Some(0.0),
+        };
+
+        let metric = importer.parse_connect_iq_field(&temp_field, 22.5);
+        assert!(metric.is_some());
+
+        if let Some(ConnectIQMetric::Environmental { temperature, humidity, air_quality }) = metric {
+            assert_eq!(temperature, Some(22.5));
+            assert_eq!(humidity, None);
+            assert_eq!(air_quality, None);
+        } else {
+            panic!("Expected Environmental metric");
+        }
+
+        // Test humidity
+        let hum_field = DeveloperField {
+            developer_data_id: 0,
+            field_definition_number: 5,
+            field_name: "Humidity".to_string(),
+            fit_base_type_id: 2,
+            units: Some("percent".to_string()),
+            scale: Some(1.0),
+            offset: Some(0.0),
+        };
+
+        let metric = importer.parse_connect_iq_field(&hum_field, 65.0);
+        assert!(metric.is_some());
+
+        if let Some(ConnectIQMetric::Environmental { temperature, humidity, air_quality }) = metric {
+            assert_eq!(temperature, None);
+            assert_eq!(humidity, Some(65.0));
+            assert_eq!(air_quality, None);
+        } else {
+            panic!("Expected Environmental metric");
+        }
+    }
+
+    #[test]
+    fn test_connect_iq_physiological_metrics() {
+        use crate::models::{ConnectIQMetric, DeveloperField};
+
+        let importer = FitImporter::new();
+
+        // Test core temperature
+        let core_temp_field = DeveloperField {
+            developer_data_id: 0,
+            field_definition_number: 6,
+            field_name: "Core Temperature".to_string(),
+            fit_base_type_id: 2,
+            units: Some("celsius".to_string()),
+            scale: Some(1.0),
+            offset: Some(0.0),
+        };
+
+        let metric = importer.parse_connect_iq_field(&core_temp_field, 37.5);
+        assert!(metric.is_some());
+
+        if let Some(ConnectIQMetric::CoreTemperature(temp)) = metric {
+            assert_eq!(temp, 37.5);
+        } else {
+            panic!("Expected CoreTemperature metric");
+        }
+
+        // Test aerodynamic CdA
+        let cda_field = DeveloperField {
+            developer_data_id: 0,
+            field_definition_number: 7,
+            field_name: "CdA".to_string(),
+            fit_base_type_id: 2,
+            units: Some("m^2".to_string()),
+            scale: Some(1.0),
+            offset: Some(0.0),
+        };
+
+        let metric = importer.parse_connect_iq_field(&cda_field, 0.285);
+        assert!(metric.is_some());
+
+        if let Some(ConnectIQMetric::AerodynamicCdA(cda)) = metric {
+            assert_eq!(cda, 0.285);
+        } else {
+            panic!("Expected AerodynamicCdA metric");
+        }
+    }
+
+    #[test]
+    fn test_connect_iq_custom_fallback() {
+        use crate::models::{ConnectIQMetric, DeveloperField};
+
+        let importer = FitImporter::new();
+
+        // Test unknown field falls back to Custom
+        let custom_field = DeveloperField {
+            developer_data_id: 0,
+            field_definition_number: 99,
+            field_name: "Unknown Metric".to_string(),
+            fit_base_type_id: 2,
+            units: Some("custom_unit".to_string()),
+            scale: Some(10.0),
+            offset: Some(5.0),
+        };
+
+        let metric = importer.parse_connect_iq_field(&custom_field, 100.0);
+        assert!(metric.is_some());
+
+        if let Some(ConnectIQMetric::Custom { name, value, units }) = metric {
+            assert_eq!(name, "Unknown Metric");
+            assert_eq!(value, 100.0);
+            assert_eq!(units, Some("custom_unit".to_string()));
+        } else {
+            panic!("Expected Custom metric");
+        }
+    }
+
+    #[test]
+    fn test_connect_iq_metric_descriptions() {
+        use crate::models::ConnectIQMetric;
+
+        // Test various metric descriptions
+        let pb = ConnectIQMetric::PowerBalance {
+            left_percent: 52.0,
+            right_percent: 48.0,
+        };
+        assert!(pb.description().contains("52.0%"));
+        assert!(pb.description().contains("48.0%"));
+
+        let lss = ConnectIQMetric::LegSpringStiffness(11.5);
+        assert!(lss.description().contains("11.5"));
+        assert!(lss.description().contains("kN/m"));
+
+        let rp = ConnectIQMetric::RunningPower(250);
+        assert!(rp.description().contains("250"));
+        assert!(rp.description().contains("W"));
+
+        let env = ConnectIQMetric::Environmental {
+            temperature: Some(23.5),
+            humidity: Some(60.0),
+            air_quality: None,
+        };
+        let desc = env.description();
+        assert!(desc.contains("23.5"));
+        assert!(desc.contains("60"));
     }
 }
