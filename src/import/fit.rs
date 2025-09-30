@@ -672,6 +672,267 @@ impl FitImporter {
             units: field.units.clone(),
         })
     }
+
+    /// Parse muscle oxygen sensor data (Moxy, BSX Insight)
+    /// Extracts SmO2 (muscle oxygen saturation) and tHb (total hemoglobin) values
+    fn parse_muscle_oxygen_data(
+        &self,
+        field: &crate::models::DeveloperField,
+        value: f64,
+        timestamp: u32,
+    ) -> Option<crate::models::MuscleOxygenData> {
+        let field_name_lower = field.field_name.to_lowercase();
+
+        // Check if this is an SmO2 field
+        if field_name_lower.contains("smo2") ||
+           (field_name_lower.contains("muscle") && field_name_lower.contains("oxygen")) ||
+           field_name_lower.contains("saturation") {
+            Some(crate::models::MuscleOxygenData {
+                timestamp,
+                smo2: value,
+                thb: 0.0, // Would need to be populated from paired field
+                location: self.extract_sensor_location(&field_name_lower),
+            })
+        }
+        // Check if this is a tHb field
+        else if field_name_lower.contains("thb") ||
+                (field_name_lower.contains("hemoglobin") && field_name_lower.contains("total")) {
+            Some(crate::models::MuscleOxygenData {
+                timestamp,
+                smo2: 0.0, // Would need to be populated from paired field
+                thb: value,
+                location: self.extract_sensor_location(&field_name_lower),
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Parse core body temperature sensor data (CORE sensor, ingestible pills)
+    fn parse_core_temp_data(
+        &self,
+        field: &crate::models::DeveloperField,
+        value: f64,
+        timestamp: u32,
+    ) -> Option<crate::models::CoreTempData> {
+        let field_name_lower = field.field_name.to_lowercase();
+
+        // Core temperature sensors
+        if field_name_lower.contains("core") && field_name_lower.contains("temp") {
+            Some(crate::models::CoreTempData {
+                timestamp,
+                core_temp: value,
+                skin_temp: None,
+                sensor_type: self.extract_sensor_type(&field_name_lower),
+            })
+        }
+        // Skin temperature (for heat stress calculation)
+        else if field_name_lower.contains("skin") && field_name_lower.contains("temp") {
+            Some(crate::models::CoreTempData {
+                timestamp,
+                core_temp: 0.0, // Would need paired core temp field
+                skin_temp: Some(value),
+                sensor_type: Some("skin_sensor".to_string()),
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Parse advanced power meter metrics (torque effectiveness, pedal smoothness, power phases)
+    fn parse_advanced_power_data(
+        &self,
+        field: &crate::models::DeveloperField,
+        value: f64,
+        timestamp: u32,
+    ) -> Option<crate::models::AdvancedPowerData> {
+        let field_name_lower = field.field_name.to_lowercase();
+
+        // Initialize with None values
+        let mut data = crate::models::AdvancedPowerData {
+            timestamp,
+            torque_effectiveness: None,
+            pedal_smoothness: None,
+            platform_center_offset: None,
+            power_phase_start: None,
+            power_phase_end: None,
+            peak_phase_start: None,
+            peak_phase_end: None,
+        };
+
+        let mut matched = false;
+
+        // Torque effectiveness
+        if field_name_lower.contains("torque") && field_name_lower.contains("effect") {
+            if field_name_lower.contains("left") {
+                data.torque_effectiveness = Some((value, 0.0));
+                matched = true;
+            } else if field_name_lower.contains("right") {
+                data.torque_effectiveness = Some((0.0, value));
+                matched = true;
+            }
+        }
+
+        // Pedal smoothness
+        if field_name_lower.contains("pedal") && field_name_lower.contains("smooth") {
+            if field_name_lower.contains("left") {
+                data.pedal_smoothness = Some((value, 0.0));
+                matched = true;
+            } else if field_name_lower.contains("right") {
+                data.pedal_smoothness = Some((0.0, value));
+                matched = true;
+            }
+        }
+
+        // Platform center offset (pedal force application point)
+        if field_name_lower.contains("platform") && field_name_lower.contains("offset") {
+            if field_name_lower.contains("left") {
+                data.platform_center_offset = Some((value as i8, 0));
+                matched = true;
+            } else if field_name_lower.contains("right") {
+                data.platform_center_offset = Some((0, value as i8));
+                matched = true;
+            }
+        }
+
+        // Power phase angles
+        if field_name_lower.contains("power") && field_name_lower.contains("phase") {
+            if field_name_lower.contains("start") {
+                if field_name_lower.contains("left") {
+                    data.power_phase_start = Some((value, 0.0));
+                    matched = true;
+                } else if field_name_lower.contains("right") {
+                    data.power_phase_start = Some((0.0, value));
+                    matched = true;
+                }
+            } else if field_name_lower.contains("end") {
+                if field_name_lower.contains("left") {
+                    data.power_phase_end = Some((value, 0.0));
+                    matched = true;
+                } else if field_name_lower.contains("right") {
+                    data.power_phase_end = Some((0.0, value));
+                    matched = true;
+                }
+            }
+        }
+
+        // Peak power phase angles
+        if field_name_lower.contains("peak") && field_name_lower.contains("phase") {
+            if field_name_lower.contains("start") {
+                if field_name_lower.contains("left") {
+                    data.peak_phase_start = Some((value, 0.0));
+                    matched = true;
+                } else if field_name_lower.contains("right") {
+                    data.peak_phase_start = Some((0.0, value));
+                    matched = true;
+                }
+            } else if field_name_lower.contains("end") {
+                if field_name_lower.contains("left") {
+                    data.peak_phase_end = Some((value, 0.0));
+                    matched = true;
+                } else if field_name_lower.contains("right") {
+                    data.peak_phase_end = Some((0.0, value));
+                    matched = true;
+                }
+            }
+        }
+
+        if matched {
+            Some(data)
+        } else {
+            None
+        }
+    }
+
+    /// Parse custom cycling sensor data (CdA, wind, gradient)
+    fn parse_custom_cycling_data(
+        &self,
+        field: &crate::models::DeveloperField,
+        value: f64,
+        timestamp: u32,
+    ) -> Option<crate::models::CustomCyclingData> {
+        let field_name_lower = field.field_name.to_lowercase();
+
+        let mut data = crate::models::CustomCyclingData {
+            timestamp,
+            cda: None,
+            wind_speed: None,
+            wind_direction: None,
+            gradient: None,
+            gradient_adjusted_power: None,
+        };
+
+        let mut matched = false;
+
+        // Aerodynamic drag coefficient
+        if field_name_lower.contains("cda") ||
+           (field_name_lower.contains("drag") && field_name_lower.contains("coeff")) {
+            data.cda = Some(value);
+            matched = true;
+        }
+
+        // Wind metrics
+        if field_name_lower.contains("wind") {
+            if field_name_lower.contains("speed") {
+                data.wind_speed = Some(value);
+                matched = true;
+            } else if field_name_lower.contains("direction") {
+                data.wind_direction = Some(value);
+                matched = true;
+            }
+        }
+
+        // Gradient/slope
+        if field_name_lower.contains("gradient") || field_name_lower.contains("slope") {
+            data.gradient = Some(value);
+            matched = true;
+        }
+
+        // Gradient-adjusted power
+        if field_name_lower.contains("gradient") && field_name_lower.contains("power") {
+            data.gradient_adjusted_power = Some(value as u16);
+            matched = true;
+        }
+
+        if matched {
+            Some(data)
+        } else {
+            None
+        }
+    }
+
+    /// Extract sensor location from field name (e.g., "left_quadriceps", "right_calf")
+    fn extract_sensor_location(&self, field_name: &str) -> Option<String> {
+        let locations = [
+            ("left", "quad", "left_quadriceps"),
+            ("right", "quad", "right_quadriceps"),
+            ("left", "calf", "left_calf"),
+            ("right", "calf", "right_calf"),
+            ("left", "glute", "left_glute"),
+            ("right", "glute", "right_glute"),
+        ];
+
+        for (side, muscle, location) in &locations {
+            if field_name.contains(side) && field_name.contains(muscle) {
+                return Some(location.to_string());
+            }
+        }
+
+        None
+    }
+
+    /// Extract sensor type from field name
+    fn extract_sensor_type(&self, field_name: &str) -> Option<String> {
+        if field_name.contains("core") && field_name.contains("sensor") {
+            Some("core_sensor".to_string())
+        } else if field_name.contains("ingestible") || field_name.contains("pill") {
+            Some("ingestible_pill".to_string())
+        } else if field_name.contains("rectal") {
+            Some("rectal".to_string())
+        } else {
+            None
+        }
+    }
 }
 
 impl ImportFormat for FitImporter {
