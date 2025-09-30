@@ -975,3 +975,71 @@ impl ConnectIQMetric {
         }
     }
 }
+
+/// Muscle oxygen sensor data (Moxy, BSX Insight)
+/// Tracks muscle oxygenation and hemoglobin concentration
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MuscleOxygenData {
+    /// Timestamp in seconds from workout start
+    pub timestamp: u32,
+    /// Muscle oxygen saturation (SmO2) as percentage (0-100%)
+    pub smo2: f64,
+    /// Total hemoglobin concentration (tHb) in g/dL
+    pub thb: f64,
+    /// Optional sensor location (e.g., "left_quadriceps", "right_calf")
+    pub location: Option<String>,
+}
+
+/// Core body temperature sensor data (CORE sensor, ingestible pills)
+/// Tracks internal body temperature for heat stress monitoring
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CoreTempData {
+    /// Timestamp in seconds from workout start
+    pub timestamp: u32,
+    /// Core body temperature in Celsius
+    pub core_temp: f64,
+    /// Optional skin temperature in Celsius
+    pub skin_temp: Option<f64>,
+    /// Sensor type (e.g., "core_sensor", "ingestible_pill", "rectal")
+    pub sensor_type: Option<String>,
+}
+
+/// Advanced power meter metrics (Garmin Vector, Favero Assioma, PowerTap P2)
+/// Provides detailed pedal-based power analysis beyond standard power output
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdvancedPowerData {
+    /// Timestamp in seconds from workout start
+    pub timestamp: u32,
+    /// Left/right torque effectiveness (percentage of pedal stroke producing positive torque)
+    pub torque_effectiveness: Option<(f64, f64)>,
+    /// Left/right pedal smoothness (evenness of power application)
+    pub pedal_smoothness: Option<(f64, f64)>,
+    /// Left/right platform center offset in millimeters (pedal force application point)
+    pub platform_center_offset: Option<(i8, i8)>,
+    /// Left/right power phase start angle in degrees (where positive power begins)
+    pub power_phase_start: Option<(f64, f64)>,
+    /// Left/right power phase end angle in degrees (where positive power ends)
+    pub power_phase_end: Option<(f64, f64)>,
+    /// Peak power phase start angle (where peak torque begins)
+    pub peak_phase_start: Option<(f64, f64)>,
+    /// Peak power phase end angle (where peak torque ends)
+    pub peak_phase_end: Option<(f64, f64)>,
+}
+
+/// Custom cycling sensor metrics (aerodynamics, environmental)
+/// Advanced metrics for performance analysis and modeling
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CustomCyclingData {
+    /// Timestamp in seconds from workout start
+    pub timestamp: u32,
+    /// Aerodynamic drag coefficient × frontal area (CdA) in m²
+    pub cda: Option<f64>,
+    /// Wind speed in m/s (positive = headwind, negative = tailwind)
+    pub wind_speed: Option<f64>,
+    /// Wind direction in degrees (0-360°)
+    pub wind_direction: Option<f64>,
+    /// Road gradient as percentage (positive = uphill, negative = downhill)
+    pub gradient: Option<f64>,
+    /// Gradient-adjusted power in watts (power accounting for elevation changes)
+    pub gradient_adjusted_power: Option<u16>,
+}
