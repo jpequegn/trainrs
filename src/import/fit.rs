@@ -6,17 +6,39 @@ use std::fs::File;
 use std::path::Path;
 use uuid::Uuid;
 
-use crate::import::{validation::WorkoutValidator, ImportFormat};
+use crate::import::{developer_registry::DeveloperFieldRegistry, validation::WorkoutValidator, ImportFormat};
 use crate::models::{DataPoint, DataSource, Sport, Workout, WorkoutSummary, WorkoutType};
 use crate::power::PowerAnalyzer;
+use std::sync::Arc;
 
 /// FIT file importer for Garmin native format
 /// Supports parsing of FIT files from Garmin devices with focus on cycling power data
-pub struct FitImporter;
+pub struct FitImporter {
+    /// Registry of known developer field UUIDs for automatic field detection
+    registry: Arc<DeveloperFieldRegistry>,
+}
 
 impl FitImporter {
     pub fn new() -> Self {
-        Self
+        // Load embedded registry, fallback to empty if loading fails
+        let registry = DeveloperFieldRegistry::from_embedded()
+            .unwrap_or_else(|_| DeveloperFieldRegistry::new());
+
+        Self {
+            registry: Arc::new(registry),
+        }
+    }
+
+    /// Create FIT importer with custom registry
+    pub fn with_registry(registry: DeveloperFieldRegistry) -> Self {
+        Self {
+            registry: Arc::new(registry),
+        }
+    }
+
+    /// Get reference to the developer field registry
+    pub fn registry(&self) -> &DeveloperFieldRegistry {
+        &self.registry
     }
 
     /// Parse session information from FIT file
@@ -932,6 +954,31 @@ impl FitImporter {
         } else {
             None
         }
+    }
+
+    /// Check if a developer data ID is registered in the registry
+    /// Returns application info if found
+    fn lookup_registered_application(
+        &self,
+        developer_data_id: &crate::models::DeveloperDataId,
+    ) -> Option<&crate::import::developer_registry::ApplicationInfo> {
+        self.registry.get_application_by_bytes(&developer_data_id.application_id)
+    }
+
+    /// Get known field information from registry
+    /// Returns field metadata if the UUID and field number are registered
+    fn lookup_registered_field(
+        &self,
+        developer_data_id: &crate::models::DeveloperDataId,
+        field_number: u8,
+    ) -> Option<&crate::import::developer_registry::KnownField> {
+        self.registry.get_field_by_bytes(&developer_data_id.application_id, field_number)
+    }
+
+    /// Check if developer data should use registry-based parsing
+    /// Returns true if the UUID is registered, enabling automatic field detection
+    fn should_use_registry_parsing(&self, uuid_bytes: &[u8; 16]) -> bool {
+        self.registry.is_registered_by_bytes(uuid_bytes)
     }
 }
 
@@ -2068,5 +2115,120 @@ mod tests {
         assert!(importer.parse_core_temp_data(&unknown_field, 100.0, 0).is_none());
         assert!(importer.parse_advanced_power_data(&unknown_field, 100.0, 0).is_none());
         assert!(importer.parse_custom_cycling_data(&unknown_field, 100.0, 0).is_none());
+    }
+
+    #[test]
+    fn test_registry_integration() {
+        let importer = FitImporter::new();
+
+        // Verify registry is loaded
+        let registry = importer.registry();
+        assert!(registry.application_count() >= 12, "Registry should have at least 12 apps");
+
+        // Test known UUID recognition
+        let stryd_uuid = uuid::Uuid::parse_str("a42b5e01-d5e9-4eb6-9f42-91234567890a").unwrap();
+        assert!(importer.should_use_registry_parsing(stryd_uuid.as_bytes()));
+
+        // Test unknown UUID
+        let unknown_uuid = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
+        assert!(!importer.should_use_registry_parsing(unknown_uuid.as_bytes()));
+    }
+
+    #[test]
+    fn test_lookup_registered_application() {
+        use crate::models::DeveloperDataId;
+
+        let importer = FitImporter::new();
+
+        // Create a DeveloperDataId for Stryd
+        let stryd_uuid = uuid::Uuid::parse_str("a42b5e01-d5e9-4eb6-9f42-91234567890a").unwrap();
+        let dev_data_id = DeveloperDataId {
+            developer_data_id: 0,
+            application_id: *stryd_uuid.as_bytes(),
+            manufacturer_id: None,
+            developer_data_index: None,
+        };
+
+        let app_info = importer.lookup_registered_application(&dev_data_id);
+        assert!(app_info.is_some());
+        assert_eq!(app_info.unwrap().name, "Stryd Running Power");
+
+        // Test unknown UUID
+        let unknown_uuid = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
+        let unknown_dev_data_id = DeveloperDataId {
+            developer_data_id: 0,
+            application_id: *unknown_uuid.as_bytes(),
+            manufacturer_id: None,
+            developer_data_index: None,
+        };
+
+        let app_info = importer.lookup_registered_application(&unknown_dev_data_id);
+        assert!(app_info.is_none());
+    }
+
+    #[test]
+    fn test_lookup_registered_field() {
+        use crate::models::DeveloperDataId;
+
+        let importer = FitImporter::new();
+
+        // Create a DeveloperDataId for Stryd
+        let stryd_uuid = uuid::Uuid::parse_str("a42b5e01-d5e9-4eb6-9f42-91234567890a").unwrap();
+        let dev_data_id = DeveloperDataId {
+            developer_data_id: 0,
+            application_id: *stryd_uuid.as_bytes(),
+            manufacturer_id: None,
+            developer_data_index: None,
+        };
+
+        // Look up running_power field (field 0)
+        let field_info = importer.lookup_registered_field(&dev_data_id, 0);
+        assert!(field_info.is_some());
+        let field = field_info.unwrap();
+        assert_eq!(field.name, "running_power");
+        assert_eq!(field.units, Some("watts".to_string()));
+
+        // Look up form_power field (field 1)
+        let field_info = importer.lookup_registered_field(&dev_data_id, 1);
+        assert!(field_info.is_some());
+        assert_eq!(field_info.unwrap().name, "form_power");
+
+        // Look up non-existent field
+        let field_info = importer.lookup_registered_field(&dev_data_id, 99);
+        assert!(field_info.is_none());
+    }
+
+    #[test]
+    fn test_custom_registry() {
+        use crate::import::developer_registry::{ApplicationInfo, DeveloperFieldRegistry, KnownField};
+
+        // Create custom registry
+        let mut registry = DeveloperFieldRegistry::new();
+        let test_uuid = "12345678-1234-5678-1234-567812345678";
+
+        let app = ApplicationInfo {
+            uuid: test_uuid.to_string(),
+            name: "Test App".to_string(),
+            manufacturer: "Test Manufacturer".to_string(),
+            version: Some("1.0".to_string()),
+            fields: vec![KnownField {
+                field_number: 0,
+                name: "test_field".to_string(),
+                data_type: "uint16".to_string(),
+                units: Some("test_units".to_string()),
+                scale: Some(1.0),
+                offset: None,
+                description: Some("Test field".to_string()),
+            }],
+        };
+
+        registry.register_application(app);
+
+        // Create importer with custom registry
+        let importer = FitImporter::with_registry(registry);
+
+        // Verify custom registry is used
+        assert_eq!(importer.registry().application_count(), 1);
+        assert!(importer.registry().is_registered(test_uuid));
     }
 }

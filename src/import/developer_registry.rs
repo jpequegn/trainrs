@@ -293,4 +293,42 @@ mod tests {
         assert_eq!(deserialized.application_count(), 1);
         assert_eq!(deserialized.field_count(), 1);
     }
+
+    #[test]
+    fn test_embedded_registry_loads() {
+        // Test that the embedded JSON registry loads successfully
+        let registry = DeveloperFieldRegistry::from_embedded();
+        assert!(registry.is_ok(), "Embedded registry should load successfully");
+
+        let registry = registry.unwrap();
+
+        // Verify we have the expected number of applications
+        assert!(registry.application_count() >= 12, "Should have at least 12 registered applications");
+
+        // Verify some known applications are present
+        assert!(registry.is_registered("a42b5e01-d5e9-4eb6-9f42-91234567890a"), "Stryd should be registered");
+        assert!(registry.is_registered("c4d5e6f7-8901-4bcd-ef01-234567890123"), "Moxy should be registered");
+        assert!(registry.is_registered("f7890123-4567-4ef0-1234-567890123456"), "Garmin Vector should be registered");
+
+        // Verify field lookups work
+        let stryd = registry.get_application("a42b5e01-d5e9-4eb6-9f42-91234567890a");
+        assert!(stryd.is_some());
+        assert_eq!(stryd.unwrap().name, "Stryd Running Power");
+
+        let power_field = registry.get_field("a42b5e01-d5e9-4eb6-9f42-91234567890a", 0);
+        assert!(power_field.is_some());
+        assert_eq!(power_field.unwrap().name, "running_power");
+    }
+
+    #[test]
+    fn test_registry_statistics() {
+        let registry = DeveloperFieldRegistry::from_embedded().unwrap();
+
+        assert!(registry.application_count() >= 12);
+        assert!(registry.field_count() >= 30); // At least 30 total fields across all apps
+
+        let uuids = registry.registered_uuids();
+        assert!(uuids.len() >= 12);
+        assert!(uuids.contains(&"a42b5e01-d5e9-4eb6-9f42-91234567890a".to_string()));
+    }
 }
