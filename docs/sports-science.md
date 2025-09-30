@@ -162,6 +162,128 @@ Based on threshold pace:
 - **Zone 4**: 97-105% threshold pace (Threshold)
 - **Zone 5**: 90-96% threshold pace (VO₂ Max)
 
+## Advanced Power Analysis
+
+### Critical Power (CP) and W' (W Prime)
+
+**Scientific Basis:**
+The Critical Power model describes the hyperbolic relationship between power output and time to exhaustion. It divides work capacity into two components:
+- **Critical Power (CP)**: The highest sustainable aerobic power (watts)
+- **W' (W prime)**: Finite anaerobic work capacity above CP (joules)
+
+**Formula:** `P = CP + W'/t` (2-parameter hyperbolic model)
+
+Where:
+- P = Power output (watts)
+- t = Time to exhaustion (seconds)
+- CP = Critical Power (watts)
+- W' = Anaerobic work capacity (joules)
+
+**Key Concepts:**
+1. **CP as Sustainable Power**: Power at or below CP can theoretically be sustained indefinitely
+2. **W' as Anaerobic Battery**: Limited capacity that depletes above CP and recovers below CP
+3. **Model Types**:
+   - **2-Parameter Hyperbolic**: Standard model, linear regression on P vs 1/t
+   - **3-Parameter Hyperbolic**: Extended model with time constant
+   - **Linear P-1/t**: Mathematically equivalent to 2-parameter
+
+**Interpretation:**
+- **CP ≈ 1.00-1.05 × FTP**: CP is typically slightly higher than FTP
+- **W' Range**: 15,000-25,000 joules for trained cyclists
+- **R² > 0.95**: Indicates good model fit quality
+
+### W' Balance Tracking
+
+**Formula:** Dynamic balance calculation throughout workout
+
+**Depletion (Power > CP):**
+```
+dW'/dt = -(Power - CP)
+```
+
+**Recovery (Power < CP):**
+```
+dW'/dt = (W'max - W') / τ
+```
+Where τ (tau) is the recovery time constant.
+
+**Practical Applications:**
+1. **Interval Training**: Monitor W' depletion during high-intensity efforts
+2. **Pacing Strategy**: Prevent premature W' depletion in races
+3. **Recovery Analysis**: Assess W' reconstitution between intervals
+4. **Training Prescription**: Design workouts targeting specific W' depletion
+
+**TrainRS Implementation:**
+- Real-time W' balance calculation throughout workouts
+- Minimum balance detection (most depleted point)
+- Time spent below zero (anaerobic deficit)
+- Simplified linear recovery model for computational efficiency
+
+### Time-to-Exhaustion Prediction
+
+**Formula:** `t = W' / (P - CP)`
+
+**Applications:**
+1. **Race Pacing**: Predict sustainable duration at target powers
+2. **Interval Design**: Calculate work-to-rest ratios
+3. **Breakthrough Prediction**: Estimate when W' will be fully depleted
+4. **Current State Assessment**: Factor in partially depleted W' mid-workout
+
+**Interpretation:**
+- **Power = CP**: Infinite time (sustainable)
+- **Power > CP**: Finite time based on W' available
+- **Mid-Workout**: Adjust predictions based on current W' balance
+
+### Mean Maximal Power (MMP) Curve
+
+**Definition:** The maximum average power sustained over any given duration from 1 second to full workout length.
+
+**Calculation Method:**
+1. For each duration D (1s, 5s, 15s, 30s, 1min, 5min, 20min, etc.)
+2. Calculate rolling average power over D seconds
+3. Extract maximum value for that duration
+4. Aggregate best efforts across multiple workouts
+
+**Standard Duration Benchmarks:**
+- **5 seconds**: Neuromuscular power (sprint)
+- **1 minute**: Anaerobic capacity
+- **5 minutes**: VO₂ max power
+- **20 minutes**: Functional Threshold Power (FTP) approximation
+- **60 minutes**: Hour power (FTP validation)
+
+**Applications:**
+1. **Power Profile Analysis**: Identify strengths (sprinter vs. time trialist)
+2. **CP Model Input**: Use MMP values to calculate Critical Power
+3. **Training Zone Setting**: Calibrate zones based on actual capabilities
+4. **Performance Tracking**: Monitor improvements across all durations
+5. **FTP Estimation**: 95% of 20-minute MMP approximates FTP
+
+**TrainRS Implementation:**
+- Automatic MMP calculation from workout data
+- Multi-workout aggregation for season-best power curve
+- Standard duration extraction for CP model fitting
+- Power profile visualization and analysis
+
+### Practical CP/W' Applications
+
+#### Training Prescription
+1. **Threshold Development**: Target CP power for sustained efforts
+2. **Anaerobic Capacity**: Deplete W' to specific levels
+3. **Neuromuscular Power**: Efforts well above CP for short durations
+4. **Recovery Quality**: Monitor W' recovery rates
+
+#### Race Pacing
+1. **Sustainable Power**: Stay near CP for steady-state events
+2. **Surge Management**: Track W' depletion during attacks
+3. **Finishing Strategy**: Reserve W' for final efforts
+4. **Terrain Adaptation**: Use W' for climbs, recover on descents
+
+#### Performance Testing
+1. **3-Minute All-Out Test**: Single maximal effort protocol
+2. **Multi-Point Protocol**: 3-5 maximal efforts (3min, 8min, 12min)
+3. **MMP-Derived**: Extract from training data automatically
+4. **Model Validation**: R² values assess fit quality
+
 ## Multi-Sport Considerations
 
 ### Training Load Distribution
@@ -217,6 +339,10 @@ TrainRS metrics are based on peer-reviewed research:
 4. Friel, J. (2015). *The Power Meter Handbook*. VeloPress.
 5. McGregor, S. J., Weese, R. K., & Ratz, I. K. (2009). Performance modeling in an Olympic 1500-m finalist. *Medicine & Science in Sports & Exercise*, 41(1), 99-105.
 6. Banister, E. W. (1991). Modeling elite athletic performance. *Physiological Testing of Elite Athletes*, 347-424.
+7. Monod, H., & Scherrer, J. (1965). The work capacity of a synergic muscular group. *Ergonomics*, 8(3), 329-338.
+8. Morton, R. H. (1996). A 3-parameter critical power model. *Ergonomics*, 39(4), 611-619.
+9. Jones, A. M., Vanhatalo, A., Burnley, M., Morton, R. H., & Poole, D. C. (2010). Critical power: Implications for determination of VO₂max and exercise tolerance. *Medicine & Science in Sports & Exercise*, 42(10), 1876-1890.
+10. Skiba, P. F., Chidnok, W., Vanhatalo, A., & Jones, A. M. (2012). Modeling the expenditure and reconstitution of work capacity above critical power. *Medicine & Science in Sports & Exercise*, 44(8), 1526-1532.
 
 ---
 
