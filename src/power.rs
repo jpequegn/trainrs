@@ -54,14 +54,16 @@ pub struct PowerCurve {
 pub struct CriticalPowerModel {
     /// Critical Power (CP) - sustainable power in watts
     pub critical_power: u16,
-    /// W' (W-prime) - finite work capacity above CP in kilojoules
-    pub w_prime: u16,
+    /// W' (W-prime) - finite work capacity above CP in joules
+    pub w_prime: u32,
     /// Model fit quality (R-squared value)
     pub r_squared: Decimal,
     /// Estimated FTP from CP model
     pub estimated_ftp: u16,
     /// Model type (2-parameter or 3-parameter)
     pub model_type: CpModelType,
+    /// Test dates used for this model
+    pub test_dates: Vec<NaiveDate>,
 }
 
 /// Critical Power model types
@@ -71,6 +73,32 @@ pub enum CpModelType {
     TwoParameter,
     /// Extended 3-parameter model with time constant
     ThreeParameter { time_constant: Decimal },
+    /// Linear P-1/t model
+    LinearPInverse,
+}
+
+/// W' balance tracking during a workout
+#[derive(Debug, Clone)]
+pub struct WPrimeBalance {
+    /// Timestamp for each balance measurement
+    pub timestamps: Vec<u32>,
+    /// W' balance in joules at each timestamp
+    pub balance: Vec<i32>,
+    /// Minimum W' balance reached (most depleted)
+    pub min_balance: i32,
+    /// Time spent with W' < 0 (seconds)
+    pub time_below_zero: u32,
+}
+
+/// Time-to-exhaustion prediction
+#[derive(Debug, Clone)]
+pub struct TimeToExhaustion {
+    /// Target power in watts
+    pub target_power: u16,
+    /// Predicted time to exhaustion in seconds
+    pub time_seconds: u32,
+    /// Current W' balance (if tracking ongoing effort)
+    pub current_w_prime_balance: Option<i32>,
 }
 
 /// Power-based training metrics
@@ -232,14 +260,18 @@ impl PowerAnalyzer {
                 PowerError::InsufficientData("Missing 20-minute power".to_string()))?),
         ];
 
+        // Extract test dates from power curve
+        let test_dates = vec![power_curve.date_range.1]; // Use the most recent date
+
         match model_type {
-            CpModelType::TwoParameter => Self::fit_two_parameter_model(&test_points),
-            CpModelType::ThreeParameter { .. } => Self::fit_three_parameter_model(&test_points),
+            CpModelType::TwoParameter => Self::fit_two_parameter_model(&test_points, test_dates),
+            CpModelType::ThreeParameter { .. } => Self::fit_three_parameter_model(&test_points, test_dates),
+            CpModelType::LinearPInverse => Self::fit_linear_p_inverse_model(&test_points, test_dates),
         }
     }
 
     /// Fit 2-parameter CP model: P = CP + W'/t
-    fn fit_two_parameter_model(points: &[(u32, u16)]) -> Result<CriticalPowerModel> {
+    fn fit_two_parameter_model(points: &[(u32, u16)], test_dates: Vec<NaiveDate>) -> Result<CriticalPowerModel> {
         // Using linear regression on P vs 1/t
         // P = CP + W'/t => P = CP + W' * (1/t)
         // This is a linear equation: y = a + bx where y=P, x=1/t, a=CP, b=W'
@@ -287,21 +319,22 @@ impl PowerAnalyzer {
 
         Ok(CriticalPowerModel {
             critical_power: cp as u16,
-            w_prime: (w_prime / 1000.0) as u16, // Convert to kilojoules
+            w_prime: w_prime as u32, // W' in joules
             r_squared: Decimal::from_f64(r_squared).unwrap_or(Decimal::ZERO),
             estimated_ftp,
             model_type: CpModelType::TwoParameter,
+            test_dates,
         })
     }
 
     /// Fit 3-parameter CP model with time constant
-    fn fit_three_parameter_model(points: &[(u32, u16)]) -> Result<CriticalPowerModel> {
+    fn fit_three_parameter_model(points: &[(u32, u16)], test_dates: Vec<NaiveDate>) -> Result<CriticalPowerModel> {
         // For simplicity, we'll use an approximation with a fixed time constant
         // In a real implementation, this would use non-linear optimization
         let time_constant = dec!(30); // 30 seconds as default
 
         // Similar approach to 2-parameter but with adjustment for time constant
-        let two_param = Self::fit_two_parameter_model(points)?;
+        let two_param = Self::fit_two_parameter_model(points, test_dates.clone())?;
 
         Ok(CriticalPowerModel {
             critical_power: two_param.critical_power,
@@ -309,7 +342,14 @@ impl PowerAnalyzer {
             r_squared: two_param.r_squared,
             estimated_ftp: two_param.estimated_ftp,
             model_type: CpModelType::ThreeParameter { time_constant },
+            test_dates,
         })
+    }
+
+    /// Fit Linear P-1/t model
+    fn fit_linear_p_inverse_model(points: &[(u32, u16)], test_dates: Vec<NaiveDate>) -> Result<CriticalPowerModel> {
+        // This is the same as the 2-parameter model but explicitly named
+        Self::fit_two_parameter_model(points, test_dates)
     }
 
     /// Calculate comprehensive power metrics for a workout
@@ -531,6 +571,98 @@ impl PowerAnalyzer {
             balance_score,
         })
     }
+
+    /// Calculate W' balance throughout a workout
+    ///
+    /// W' balance represents the remaining anaerobic work capacity at each point in time.
+    /// It depletes when power > CP and recovers when power < CP.
+    pub fn calculate_w_prime_balance(
+        raw_data: &[DataPoint],
+        cp: u16,
+        w_prime: u32,
+    ) -> Result<WPrimeBalance> {
+        let power_data: Vec<(u32, u16)> = raw_data
+            .iter()
+            .filter_map(|dp| dp.power.map(|p| (dp.timestamp, p)))
+            .collect();
+
+        if power_data.is_empty() {
+            return Err(anyhow!("No power data available for W' balance calculation"));
+        }
+
+        let mut timestamps = Vec::new();
+        let mut balance = Vec::new();
+        let mut current_balance = w_prime as i32;
+        let mut min_balance = current_balance;
+        let mut time_below_zero = 0u32;
+
+        for window in power_data.windows(2) {
+            let (t1, p1) = window[0];
+            let (t2, _p2) = window[1];
+            let dt = (t2 - t1) as i32;
+
+            // Calculate W' depletion/recovery
+            if p1 > cp {
+                // Depleting W' when above CP
+                let power_above_cp = (p1 - cp) as i32;
+                current_balance -= power_above_cp * dt;
+            } else {
+                // Recovering W' when below CP
+                // Recovery follows exponential curve: dW'/dt = (W'max - W') / tau
+                // Simplified linear recovery for now
+                let power_below_cp = (cp - p1) as i32;
+                let recovery_rate = power_below_cp * dt;
+                current_balance = (current_balance + recovery_rate).min(w_prime as i32);
+            }
+
+            timestamps.push(t2);
+            balance.push(current_balance);
+            min_balance = min_balance.min(current_balance);
+
+            if current_balance < 0 {
+                time_below_zero += dt as u32;
+            }
+        }
+
+        Ok(WPrimeBalance {
+            timestamps,
+            balance,
+            min_balance,
+            time_below_zero,
+        })
+    }
+
+    /// Predict time to exhaustion at a given power level
+    ///
+    /// Using the hyperbolic model: t = W' / (P - CP)
+    /// This predicts how long an athlete can sustain a power above their CP.
+    pub fn predict_time_to_exhaustion(
+        cp_model: &CriticalPowerModel,
+        target_power: u16,
+        current_w_prime_balance: Option<i32>,
+    ) -> Result<TimeToExhaustion> {
+        if target_power <= cp_model.critical_power {
+            // Power is at or below CP, theoretically sustainable indefinitely
+            return Ok(TimeToExhaustion {
+                target_power,
+                time_seconds: u32::MAX, // Indefinite
+                current_w_prime_balance,
+            });
+        }
+
+        let w_prime_available = current_w_prime_balance
+            .unwrap_or(cp_model.w_prime as i32)
+            .max(0) as u32;
+
+        let power_above_cp = target_power - cp_model.critical_power;
+        let time_seconds = w_prime_available / power_above_cp as u32;
+
+        Ok(TimeToExhaustion {
+            target_power,
+            time_seconds,
+            current_w_prime_balance,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -633,8 +765,77 @@ mod tests {
             assert!(cp_model.critical_power < 300);
             assert!(cp_model.w_prime > 0);
             assert!(cp_model.r_squared > dec!(0.8));
+            assert!(!cp_model.test_dates.is_empty());
         } else {
             println!("Critical power model fitting failed - this is expected for some test data");
+        }
+    }
+
+    #[test]
+    fn test_w_prime_balance_calculation() {
+        let data = create_sample_power_data();
+
+        // Use realistic CP and W' values
+        let cp = 250u16;
+        let w_prime = 20000u32; // 20kJ
+
+        let w_balance = PowerAnalyzer::calculate_w_prime_balance(&data, cp, w_prime).unwrap();
+
+        assert!(!w_balance.timestamps.is_empty());
+        assert_eq!(w_balance.timestamps.len(), w_balance.balance.len());
+        assert!(w_balance.min_balance <= w_prime as i32);
+    }
+
+    #[test]
+    fn test_time_to_exhaustion_prediction() {
+        let cp_model = CriticalPowerModel {
+            critical_power: 250,
+            w_prime: 20000, // 20kJ
+            r_squared: dec!(0.95),
+            estimated_ftp: 237,
+            model_type: CpModelType::TwoParameter,
+            test_dates: vec![NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()],
+        };
+
+        // Test power above CP
+        let tte = PowerAnalyzer::predict_time_to_exhaustion(&cp_model, 350, None).unwrap();
+        assert_eq!(tte.target_power, 350);
+        assert_eq!(tte.time_seconds, 200); // 20000J / (350-250)W = 200s
+
+        // Test power at CP (indefinite)
+        let tte_cp = PowerAnalyzer::predict_time_to_exhaustion(&cp_model, 250, None).unwrap();
+        assert_eq!(tte_cp.time_seconds, u32::MAX);
+
+        // Test power below CP (indefinite)
+        let tte_below = PowerAnalyzer::predict_time_to_exhaustion(&cp_model, 200, None).unwrap();
+        assert_eq!(tte_below.time_seconds, u32::MAX);
+    }
+
+    #[test]
+    fn test_linear_p_inverse_model() {
+        let mut standard_durations = HashMap::new();
+        standard_durations.insert(180, 350u16);
+        standard_durations.insert(300, 320u16);
+        standard_durations.insert(1200, 280u16);
+
+        let power_curve = PowerCurve {
+            points: vec![],
+            standard_durations,
+            date_range: (
+                NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 1, 31).unwrap(),
+            ),
+        };
+
+        let cp_model_result = PowerAnalyzer::fit_critical_power_model(
+            &power_curve,
+            CpModelType::LinearPInverse,
+        );
+
+        if let Ok(cp_model) = cp_model_result {
+            assert_eq!(cp_model.model_type, CpModelType::TwoParameter); // LinearPInverse uses TwoParameter internally
+            assert!(cp_model.critical_power > 0);
+            assert!(cp_model.w_prime > 0);
         }
     }
 
