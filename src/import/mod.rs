@@ -4,6 +4,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::path::Path;
 
 pub mod csv;
+pub mod developer_registry;
 pub mod fit;
 pub mod gpx;
 pub mod streaming;

@@ -1,0 +1,366 @@
+{
+  "applications": {
+    "a42b5e01-d5e9-4eb6-9f42-91234567890a": {
+      "uuid": "a42b5e01-d5e9-4eb6-9f42-91234567890a",
+      "name": "Stryd Running Power",
+      "manufacturer": "Stryd",
+      "version": "1.0",
+      "fields": [
+        {
+          "field_number": 0,
+          "name": "running_power",
+          "data_type": "uint16",
+          "units": "watts",
+          "scale": 1.0,
+          "description": "Instantaneous running power output"
+        },
+        {
+          "field_number": 1,
+          "name": "form_power",
+          "data_type": "uint16",
+          "units": "watts",
+          "scale": 1.0,
+          "description": "Power required to overcome oscillation"
+        },
+        {
+          "field_number": 2,
+          "name": "leg_spring_stiffness",
+          "data_type": "uint16",
+          "units": "kN/m",
+          "scale": 10.0,
+          "description": "Leg spring stiffness coefficient"
+        },
+        {
+          "field_number": 3,
+          "name": "air_power",
+          "data_type": "uint16",
+          "units": "watts",
+          "scale": 1.0,
+          "description": "Power required to overcome air resistance"
+        }
+      ]
+    },
+    "b3c4d5e6-7890-4abc-def0-123456789012": {
+      "uuid": "b3c4d5e6-7890-4abc-def0-123456789012",
+      "name": "Garmin Running Dynamics Pod",
+      "manufacturer": "Garmin",
+      "version": "2.0",
+      "fields": [
+        {
+          "field_number": 0,
+          "name": "vertical_oscillation",
+          "data_type": "uint16",
+          "units": "mm",
+          "scale": 10.0,
+          "description": "Vertical oscillation of center of mass"
+        },
+        {
+          "field_number": 1,
+          "name": "ground_contact_time",
+          "data_type": "uint16",
+          "units": "ms",
+          "scale": 1.0,
+          "description": "Ground contact time per step"
+        },
+        {
+          "field_number": 2,
+          "name": "ground_contact_balance",
+          "data_type": "uint16",
+          "units": "%",
+          "scale": 100.0,
+          "description": "Left/right ground contact time balance"
+        },
+        {
+          "field_number": 3,
+          "name": "stride_length",
+          "data_type": "uint16",
+          "units": "m",
+          "scale": 100.0,
+          "description": "Stride length"
+        }
+      ]
+    },
+    "c4d5e6f7-8901-4bcd-ef01-234567890123": {
+      "uuid": "c4d5e6f7-8901-4bcd-ef01-234567890123",
+      "name": "Moxy Muscle Oxygen Monitor",
+      "manufacturer": "Moxy Monitor",
+      "version": "1.5",
+      "fields": [
+        {
+          "field_number": 0,
+          "name": "smo2",
+          "data_type": "uint16",
+          "units": "%",
+          "scale": 10.0,
+          "description": "Muscle oxygen saturation (SmO2)"
+        },
+        {
+          "field_number": 1,
+          "name": "thb",
+          "data_type": "uint16",
+          "units": "g/dL",
+          "scale": 100.0,
+          "description": "Total hemoglobin concentration (tHb)"
+        }
+      ]
+    },
+    "d5e6f789-0123-4cde-f012-345678901234": {
+      "uuid": "d5e6f789-0123-4cde-f012-345678901234",
+      "name": "BSX Insight",
+      "manufacturer": "BSX Athletics",
+      "version": "1.0",
+      "fields": [
+        {
+          "field_number": 0,
+          "name": "muscle_oxygen",
+          "data_type": "uint16",
+          "units": "%",
+          "scale": 10.0,
+          "description": "Muscle oxygen saturation"
+        },
+        {
+          "field_number": 1,
+          "name": "total_hemoglobin",
+          "data_type": "uint16",
+          "units": "g/dL",
+          "scale": 100.0,
+          "description": "Total hemoglobin concentration"
+        }
+      ]
+    },
+    "e6f78901-2345-4def-0123-456789012345": {
+      "uuid": "e6f78901-2345-4def-0123-456789012345",
+      "name": "CORE Temperature Sensor",
+      "manufacturer": "greenTEG",
+      "version": "1.0",
+      "fields": [
+        {
+          "field_number": 0,
+          "name": "core_temperature",
+          "data_type": "sint16",
+          "units": "°C",
+          "scale": 100.0,
+          "description": "Core body temperature"
+        },
+        {
+          "field_number": 1,
+          "name": "skin_temperature",
+          "data_type": "sint16",
+          "units": "°C",
+          "scale": 100.0,
+          "description": "Skin temperature"
+        }
+      ]
+    },
+    "f7890123-4567-4ef0-1234-567890123456": {
+      "uuid": "f7890123-4567-4ef0-1234-567890123456",
+      "name": "Garmin Vector Power Pedals",
+      "manufacturer": "Garmin",
+      "version": "3.0",
+      "fields": [
+        {
+          "field_number": 0,
+          "name": "left_torque_effectiveness",
+          "data_type": "uint8",
+          "units": "%",
+          "scale": 2.0,
+          "description": "Left pedal torque effectiveness"
+        },
+        {
+          "field_number": 1,
+          "name": "right_torque_effectiveness",
+          "data_type": "uint8",
+          "units": "%",
+          "scale": 2.0,
+          "description": "Right pedal torque effectiveness"
+        },
+        {
+          "field_number": 2,
+          "name": "left_pedal_smoothness",
+          "data_type": "uint8",
+          "units": "%",
+          "scale": 2.0,
+          "description": "Left pedal smoothness"
+        },
+        {
+          "field_number": 3,
+          "name": "right_pedal_smoothness",
+          "data_type": "uint8",
+          "units": "%",
+          "scale": 2.0,
+          "description": "Right pedal smoothness"
+        },
+        {
+          "field_number": 4,
+          "name": "left_platform_center_offset",
+          "data_type": "sint8",
+          "units": "mm",
+          "scale": 1.0,
+          "description": "Left pedal platform center offset"
+        },
+        {
+          "field_number": 5,
+          "name": "right_platform_center_offset",
+          "data_type": "sint8",
+          "units": "mm",
+          "scale": 1.0,
+          "description": "Right pedal platform center offset"
+        }
+      ]
+    },
+    "01234567-89ab-4cde-f012-3456789abcde": {
+      "uuid": "01234567-89ab-4cde-f012-3456789abcde",
+      "name": "Wahoo SYSTM",
+      "manufacturer": "Wahoo Fitness",
+      "version": "1.0",
+      "fields": [
+        {
+          "field_number": 0,
+          "name": "workout_intensity",
+          "data_type": "uint8",
+          "units": "%",
+          "scale": 1.0,
+          "description": "Target workout intensity"
+        },
+        {
+          "field_number": 1,
+          "name": "interval_type",
+          "data_type": "uint8",
+          "description": "Interval type identifier"
+        }
+      ]
+    },
+    "12345678-9abc-4def-0123-456789abcdef": {
+      "uuid": "12345678-9abc-4def-0123-456789abcdef",
+      "name": "TrainerRoad",
+      "manufacturer": "TrainerRoad",
+      "version": "1.0",
+      "fields": [
+        {
+          "field_number": 0,
+          "name": "target_power",
+          "data_type": "uint16",
+          "units": "watts",
+          "scale": 1.0,
+          "description": "Target power for interval"
+        },
+        {
+          "field_number": 1,
+          "name": "workout_step",
+          "data_type": "uint16",
+          "description": "Current workout step number"
+        }
+      ]
+    },
+    "23456789-abcd-4ef0-1234-56789abcdef0": {
+      "uuid": "23456789-abcd-4ef0-1234-56789abcdef0",
+      "name": "Zwift Custom Data",
+      "manufacturer": "Zwift",
+      "version": "1.0",
+      "fields": [
+        {
+          "field_number": 0,
+          "name": "virtual_speed",
+          "data_type": "uint16",
+          "units": "m/s",
+          "scale": 1000.0,
+          "description": "Virtual speed in game"
+        },
+        {
+          "field_number": 1,
+          "name": "gradient",
+          "data_type": "sint16",
+          "units": "%",
+          "scale": 100.0,
+          "description": "Virtual gradient"
+        },
+        {
+          "field_number": 2,
+          "name": "draft_effect",
+          "data_type": "uint8",
+          "units": "%",
+          "scale": 1.0,
+          "description": "Drafting effect percentage"
+        }
+      ]
+    },
+    "3456789a-bcde-4f01-2345-6789abcdef01": {
+      "uuid": "3456789a-bcde-4f01-2345-6789abcdef01",
+      "name": "Golden Cheetah",
+      "manufacturer": "Golden Cheetah",
+      "version": "3.5",
+      "fields": [
+        {
+          "field_number": 0,
+          "name": "wprime_balance",
+          "data_type": "sint32",
+          "units": "joules",
+          "scale": 1.0,
+          "description": "W' balance (anaerobic work capacity)"
+        },
+        {
+          "field_number": 1,
+          "name": "match_intensity",
+          "data_type": "uint16",
+          "units": "kJ",
+          "scale": 1000.0,
+          "description": "Match intensity (accumulated W' expenditure)"
+        }
+      ]
+    },
+    "456789ab-cdef-4012-3456-789abcdef012": {
+      "uuid": "456789ab-cdef-4012-3456-789abcdef012",
+      "name": "Favero Assioma Power Pedals",
+      "manufacturer": "Favero Electronics",
+      "version": "1.0",
+      "fields": [
+        {
+          "field_number": 0,
+          "name": "left_power",
+          "data_type": "uint16",
+          "units": "watts",
+          "scale": 1.0,
+          "description": "Left pedal power"
+        },
+        {
+          "field_number": 1,
+          "name": "right_power",
+          "data_type": "uint16",
+          "units": "watts",
+          "scale": 1.0,
+          "description": "Right pedal power"
+        },
+        {
+          "field_number": 2,
+          "name": "pedaling_index",
+          "data_type": "uint8",
+          "units": "%",
+          "scale": 1.0,
+          "description": "Pedaling efficiency index"
+        }
+      ]
+    },
+    "56789abc-def0-4123-4567-89abcdef0123": {
+      "uuid": "56789abc-def0-4123-4567-89abcdef0123",
+      "name": "Humon Hex",
+      "manufacturer": "Humon",
+      "version": "1.0",
+      "fields": [
+        {
+          "field_number": 0,
+          "name": "muscle_oxygen",
+          "data_type": "uint8",
+          "units": "%",
+          "scale": 1.0,
+          "description": "Muscle oxygen saturation"
+        },
+        {
+          "field_number": 1,
+          "name": "workout_zone",
+          "data_type": "uint8",
+          "description": "Training zone based on muscle oxygen"
+        }
+      ]
+    }
+  }
+}
