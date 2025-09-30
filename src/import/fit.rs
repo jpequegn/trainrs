@@ -1005,6 +1005,7 @@ impl ImportFormat for FitImporter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::DeveloperField;
     use rust_decimal_macros::dec;
 
     /// Create test data points with power data for testing advanced metrics
@@ -1694,5 +1695,378 @@ mod tests {
         let desc = env.description();
         assert!(desc.contains("23.5"));
         assert!(desc.contains("60"));
+    }
+
+    #[test]
+    fn test_parse_muscle_oxygen_smo2() {
+        let importer = FitImporter::new();
+
+        // Test SmO2 field parsing
+        let smo2_field = DeveloperField {
+            developer_data_id: 0,
+            field_definition_number: 1,
+            field_name: "Left Quad SmO2".to_string(),
+            fit_base_type_id: 2,
+            units: Some("%".to_string()),
+            scale: Some(1.0),
+            offset: None,
+        };
+
+        let result = importer.parse_muscle_oxygen_data(&smo2_field, 78.5, 120);
+        assert!(result.is_some());
+
+        let data = result.unwrap();
+        assert_eq!(data.timestamp, 120);
+        assert_eq!(data.smo2, 78.5);
+        assert_eq!(data.thb, 0.0);
+        assert_eq!(data.location, Some("left_quadriceps".to_string()));
+    }
+
+    #[test]
+    fn test_parse_muscle_oxygen_thb() {
+        let importer = FitImporter::new();
+
+        // Test tHb field parsing
+        let thb_field = DeveloperField {
+            developer_data_id: 0,
+            field_definition_number: 2,
+            field_name: "Right Calf tHb".to_string(),
+            fit_base_type_id: 2,
+            units: Some("g/dL".to_string()),
+            scale: Some(1.0),
+            offset: None,
+        };
+
+        let result = importer.parse_muscle_oxygen_data(&thb_field, 12.8, 130);
+        assert!(result.is_some());
+
+        let data = result.unwrap();
+        assert_eq!(data.timestamp, 130);
+        assert_eq!(data.smo2, 0.0);
+        assert_eq!(data.thb, 12.8);
+        assert_eq!(data.location, Some("right_calf".to_string()));
+    }
+
+    #[test]
+    fn test_parse_core_temperature() {
+        let importer = FitImporter::new();
+
+        // Test core temperature field
+        let core_temp_field = DeveloperField {
+            developer_data_id: 1,
+            field_definition_number: 5,
+            field_name: "CORE Sensor Core Temp".to_string(),
+            fit_base_type_id: 2,
+            units: Some("°C".to_string()),
+            scale: Some(1.0),
+            offset: None,
+        };
+
+        let result = importer.parse_core_temp_data(&core_temp_field, 38.2, 600);
+        assert!(result.is_some());
+
+        let data = result.unwrap();
+        assert_eq!(data.timestamp, 600);
+        assert_eq!(data.core_temp, 38.2);
+        assert_eq!(data.skin_temp, None);
+        assert_eq!(data.sensor_type, Some("core_sensor".to_string()));
+    }
+
+    #[test]
+    fn test_parse_skin_temperature() {
+        let importer = FitImporter::new();
+
+        // Test skin temperature field
+        let skin_temp_field = DeveloperField {
+            developer_data_id: 1,
+            field_definition_number: 6,
+            field_name: "Skin Temp".to_string(),
+            fit_base_type_id: 2,
+            units: Some("°C".to_string()),
+            scale: Some(1.0),
+            offset: None,
+        };
+
+        let result = importer.parse_core_temp_data(&skin_temp_field, 32.5, 610);
+        assert!(result.is_some());
+
+        let data = result.unwrap();
+        assert_eq!(data.timestamp, 610);
+        assert_eq!(data.core_temp, 0.0);
+        assert_eq!(data.skin_temp, Some(32.5));
+        assert_eq!(data.sensor_type, Some("skin_sensor".to_string()));
+    }
+
+    #[test]
+    fn test_parse_torque_effectiveness() {
+        let importer = FitImporter::new();
+
+        // Test left torque effectiveness
+        let left_te_field = DeveloperField {
+            developer_data_id: 2,
+            field_definition_number: 10,
+            field_name: "Left Torque Effectiveness".to_string(),
+            fit_base_type_id: 2,
+            units: Some("%".to_string()),
+            scale: Some(1.0),
+            offset: None,
+        };
+
+        let result = importer.parse_advanced_power_data(&left_te_field, 92.5, 300);
+        assert!(result.is_some());
+
+        let data = result.unwrap();
+        assert_eq!(data.timestamp, 300);
+        assert_eq!(data.torque_effectiveness, Some((92.5, 0.0)));
+    }
+
+    #[test]
+    fn test_parse_pedal_smoothness() {
+        let importer = FitImporter::new();
+
+        // Test right pedal smoothness
+        let right_ps_field = DeveloperField {
+            developer_data_id: 2,
+            field_definition_number: 11,
+            field_name: "Right Pedal Smoothness".to_string(),
+            fit_base_type_id: 2,
+            units: Some("%".to_string()),
+            scale: Some(1.0),
+            offset: None,
+        };
+
+        let result = importer.parse_advanced_power_data(&right_ps_field, 88.3, 310);
+        assert!(result.is_some());
+
+        let data = result.unwrap();
+        assert_eq!(data.timestamp, 310);
+        assert_eq!(data.pedal_smoothness, Some((0.0, 88.3)));
+    }
+
+    #[test]
+    fn test_parse_power_phase() {
+        let importer = FitImporter::new();
+
+        // Test power phase start
+        let phase_start_field = DeveloperField {
+            developer_data_id: 2,
+            field_definition_number: 15,
+            field_name: "Left Power Phase Start".to_string(),
+            fit_base_type_id: 2,
+            units: Some("degrees".to_string()),
+            scale: Some(1.0),
+            offset: None,
+        };
+
+        let result = importer.parse_advanced_power_data(&phase_start_field, 15.5, 320);
+        assert!(result.is_some());
+
+        let data = result.unwrap();
+        assert_eq!(data.timestamp, 320);
+        assert_eq!(data.power_phase_start, Some((15.5, 0.0)));
+    }
+
+    #[test]
+    fn test_parse_platform_center_offset() {
+        let importer = FitImporter::new();
+
+        // Test platform center offset
+        let offset_field = DeveloperField {
+            developer_data_id: 2,
+            field_definition_number: 20,
+            field_name: "Right Platform Offset".to_string(),
+            fit_base_type_id: 2,
+            units: Some("mm".to_string()),
+            scale: Some(1.0),
+            offset: None,
+        };
+
+        let result = importer.parse_advanced_power_data(&offset_field, -3.0, 330);
+        assert!(result.is_some());
+
+        let data = result.unwrap();
+        assert_eq!(data.timestamp, 330);
+        assert_eq!(data.platform_center_offset, Some((0, -3)));
+    }
+
+    #[test]
+    fn test_parse_cda() {
+        let importer = FitImporter::new();
+
+        // Test aerodynamic CdA
+        let cda_field = DeveloperField {
+            developer_data_id: 3,
+            field_definition_number: 25,
+            field_name: "CdA".to_string(),
+            fit_base_type_id: 2,
+            units: Some("m²".to_string()),
+            scale: Some(1.0),
+            offset: None,
+        };
+
+        let result = importer.parse_custom_cycling_data(&cda_field, 0.285, 500);
+        assert!(result.is_some());
+
+        let data = result.unwrap();
+        assert_eq!(data.timestamp, 500);
+        assert_eq!(data.cda, Some(0.285));
+    }
+
+    #[test]
+    fn test_parse_wind_metrics() {
+        let importer = FitImporter::new();
+
+        // Test wind speed
+        let wind_speed_field = DeveloperField {
+            developer_data_id: 3,
+            field_definition_number: 26,
+            field_name: "Wind Speed".to_string(),
+            fit_base_type_id: 2,
+            units: Some("m/s".to_string()),
+            scale: Some(1.0),
+            offset: None,
+        };
+
+        let result = importer.parse_custom_cycling_data(&wind_speed_field, 5.2, 510);
+        assert!(result.is_some());
+
+        let data = result.unwrap();
+        assert_eq!(data.timestamp, 510);
+        assert_eq!(data.wind_speed, Some(5.2));
+
+        // Test wind direction
+        let wind_dir_field = DeveloperField {
+            developer_data_id: 3,
+            field_definition_number: 27,
+            field_name: "Wind Direction".to_string(),
+            fit_base_type_id: 2,
+            units: Some("degrees".to_string()),
+            scale: Some(1.0),
+            offset: None,
+        };
+
+        let result = importer.parse_custom_cycling_data(&wind_dir_field, 180.0, 520);
+        assert!(result.is_some());
+
+        let data = result.unwrap();
+        assert_eq!(data.timestamp, 520);
+        assert_eq!(data.wind_direction, Some(180.0));
+    }
+
+    #[test]
+    fn test_parse_gradient() {
+        let importer = FitImporter::new();
+
+        // Test gradient/slope
+        let gradient_field = DeveloperField {
+            developer_data_id: 3,
+            field_definition_number: 28,
+            field_name: "Gradient".to_string(),
+            fit_base_type_id: 2,
+            units: Some("%".to_string()),
+            scale: Some(1.0),
+            offset: None,
+        };
+
+        let result = importer.parse_custom_cycling_data(&gradient_field, 8.5, 530);
+        assert!(result.is_some());
+
+        let data = result.unwrap();
+        assert_eq!(data.timestamp, 530);
+        assert_eq!(data.gradient, Some(8.5));
+    }
+
+    #[test]
+    fn test_parse_gradient_adjusted_power() {
+        let importer = FitImporter::new();
+
+        // Test gradient-adjusted power
+        let gap_field = DeveloperField {
+            developer_data_id: 3,
+            field_definition_number: 29,
+            field_name: "Gradient Adjusted Power".to_string(),
+            fit_base_type_id: 2,
+            units: Some("watts".to_string()),
+            scale: Some(1.0),
+            offset: None,
+        };
+
+        let result = importer.parse_custom_cycling_data(&gap_field, 285.0, 540);
+        assert!(result.is_some());
+
+        let data = result.unwrap();
+        assert_eq!(data.timestamp, 540);
+        assert_eq!(data.gradient_adjusted_power, Some(285));
+    }
+
+    #[test]
+    fn test_sensor_location_extraction() {
+        let importer = FitImporter::new();
+
+        assert_eq!(
+            importer.extract_sensor_location("left_quadriceps_smo2"),
+            Some("left_quadriceps".to_string())
+        );
+
+        assert_eq!(
+            importer.extract_sensor_location("right_calf_thb"),
+            Some("right_calf".to_string())
+        );
+
+        assert_eq!(
+            importer.extract_sensor_location("left_glute_oxygen"),
+            Some("left_glute".to_string())
+        );
+
+        assert_eq!(
+            importer.extract_sensor_location("unknown_location"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_sensor_type_extraction() {
+        let importer = FitImporter::new();
+
+        assert_eq!(
+            importer.extract_sensor_type("core_sensor_temperature"),
+            Some("core_sensor".to_string())
+        );
+
+        assert_eq!(
+            importer.extract_sensor_type("ingestible_pill_temp"),
+            Some("ingestible_pill".to_string())
+        );
+
+        assert_eq!(
+            importer.extract_sensor_type("rectal_temperature"),
+            Some("rectal".to_string())
+        );
+
+        assert_eq!(
+            importer.extract_sensor_type("unknown_sensor"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_unrecognized_custom_sensor_fields() {
+        let importer = FitImporter::new();
+
+        // Test field that doesn't match any pattern
+        let unknown_field = DeveloperField {
+            developer_data_id: 99,
+            field_definition_number: 99,
+            field_name: "Unknown Sensor Data".to_string(),
+            fit_base_type_id: 2,
+            units: Some("units".to_string()),
+            scale: Some(1.0),
+            offset: None,
+        };
+
+        assert!(importer.parse_muscle_oxygen_data(&unknown_field, 100.0, 0).is_none());
+        assert!(importer.parse_core_temp_data(&unknown_field, 100.0, 0).is_none());
+        assert!(importer.parse_advanced_power_data(&unknown_field, 100.0, 0).is_none());
+        assert!(importer.parse_custom_cycling_data(&unknown_field, 100.0, 0).is_none());
     }
 }
