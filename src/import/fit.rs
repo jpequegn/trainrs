@@ -410,6 +410,161 @@ impl FitImporter {
             Sport::CrossTraining => DataSource::HeartRate, // Default for cross training
         }
     }
+
+    /// Parse developer data IDs from FIT records (message type 207)
+    /// These map developer field indices to application UUIDs
+    fn parse_developer_data_ids(&self, records: &[FitDataRecord]) -> Vec<crate::models::DeveloperDataId> {
+        use crate::models::DeveloperDataId;
+
+        let mut developer_ids = Vec::new();
+
+        for record in records {
+            // Check if this is a DeveloperDataId message (type 207)
+            if record.kind() == fitparser::profile::MesgNum::DeveloperDataId {
+                let mut developer_data_id: Option<u8> = None;
+                let mut application_id: Option<[u8; 16]> = None;
+                let mut manufacturer_id: Option<u16> = None;
+                let mut developer_data_index: Option<u8> = None;
+
+                for field in record.fields() {
+                    match field.name() {
+                        "developer_data_index" => {
+                            if let Value::UInt8(id) = field.value() {
+                                developer_data_id = Some(*id);
+                            }
+                        }
+                        "application_id" => {
+                            // Application ID is a 16-byte UUID
+                            if let Value::Array(bytes) = field.value() {
+                                if bytes.len() == 16 {
+                                    let mut uuid_bytes = [0u8; 16];
+                                    for (i, byte) in bytes.iter().enumerate() {
+                                        if let Value::UInt8(b) = byte {
+                                            uuid_bytes[i] = *b;
+                                        }
+                                    }
+                                    application_id = Some(uuid_bytes);
+                                }
+                            }
+                        }
+                        "manufacturer_id" => {
+                            if let Value::UInt16(id) = field.value() {
+                                manufacturer_id = Some(*id);
+                            }
+                        }
+                        "developer_data_index_2" => {
+                            if let Value::UInt8(idx) = field.value() {
+                                developer_data_index = Some(*idx);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Create DeveloperDataId if we have the required fields
+                if let (Some(dev_id), Some(app_id)) = (developer_data_id, application_id) {
+                    developer_ids.push(DeveloperDataId {
+                        developer_data_id: dev_id,
+                        application_id: app_id,
+                        manufacturer_id,
+                        developer_data_index,
+                    });
+                }
+            }
+        }
+
+        developer_ids
+    }
+
+    /// Parse developer field descriptions from FIT records (message type 206)
+    /// These define the metadata for custom fields
+    fn parse_field_descriptions(&self, records: &[FitDataRecord]) -> Vec<crate::models::DeveloperField> {
+        use crate::models::DeveloperField;
+
+        let mut developer_fields = Vec::new();
+
+        for record in records {
+            // Check if this is a FieldDescription message (type 206)
+            if record.kind() == fitparser::profile::MesgNum::FieldDescription {
+                let mut developer_data_id: Option<u8> = None;
+                let mut field_definition_number: Option<u8> = None;
+                let mut field_name: Option<String> = None;
+                let mut fit_base_type_id: Option<u8> = None;
+                let mut units: Option<String> = None;
+                let mut scale: Option<f64> = None;
+                let mut offset: Option<f64> = None;
+
+                for field in record.fields() {
+                    match field.name() {
+                        "developer_data_index" => {
+                            if let Value::UInt8(id) = field.value() {
+                                developer_data_id = Some(*id);
+                            }
+                        }
+                        "field_definition_number" => {
+                            if let Value::UInt8(num) = field.value() {
+                                field_definition_number = Some(*num);
+                            }
+                        }
+                        "field_name" => {
+                            if let Value::String(name) = field.value() {
+                                field_name = Some(name.to_string());
+                            }
+                        }
+                        "fit_base_type_id" => {
+                            if let Value::UInt8(type_id) = field.value() {
+                                fit_base_type_id = Some(*type_id);
+                            }
+                        }
+                        "units" => {
+                            if let Value::String(unit_str) = field.value() {
+                                units = Some(unit_str.to_string());
+                            }
+                        }
+                        "scale" => {
+                            if let Value::UInt8(s) = field.value() {
+                                scale = Some(*s as f64);
+                            } else if let Value::UInt16(s) = field.value() {
+                                scale = Some(*s as f64);
+                            } else if let Value::UInt32(s) = field.value() {
+                                scale = Some(*s as f64);
+                            } else if let Value::Float64(s) = field.value() {
+                                scale = Some(*s);
+                            }
+                        }
+                        "offset" => {
+                            if let Value::SInt8(o) = field.value() {
+                                offset = Some(*o as f64);
+                            } else if let Value::SInt16(o) = field.value() {
+                                offset = Some(*o as f64);
+                            } else if let Value::SInt32(o) = field.value() {
+                                offset = Some(*o as f64);
+                            } else if let Value::Float64(o) = field.value() {
+                                offset = Some(*o);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Create DeveloperField if we have the required fields
+                if let (Some(dev_id), Some(field_num), Some(name), Some(type_id)) =
+                    (developer_data_id, field_definition_number, field_name, fit_base_type_id) {
+                    developer_fields.push(DeveloperField {
+                        developer_data_id: dev_id,
+                        field_definition_number: field_num,
+                        field_name: name,
+                        fit_base_type_id: type_id,
+                        units,
+                        scale,
+                        offset,
+                    });
+                }
+            }
+        }
+
+        developer_fields
+    }
 }
 
 impl ImportFormat for FitImporter {
