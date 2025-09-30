@@ -988,4 +988,113 @@ mod tests {
             assert_eq!(source, DataSource::HeartRate);
         }
     }
+
+    #[test]
+    fn test_developer_data_id_parsing() {
+        use crate::models::DeveloperDataId;
+
+        // Test DeveloperDataId structure
+        let uuid_bytes: [u8; 16] = [
+            0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+        ];
+
+        let dev_data_id = DeveloperDataId {
+            developer_data_id: 0,
+            application_id: uuid_bytes,
+            manufacturer_id: Some(255),
+            developer_data_index: Some(0),
+        };
+
+        assert_eq!(dev_data_id.developer_data_id, 0);
+        assert_eq!(dev_data_id.manufacturer_id, Some(255));
+
+        // Test UUID string conversion
+        let uuid_str = dev_data_id.application_uuid_string();
+        assert!(uuid_str.contains('-')); // UUID format check
+        assert_eq!(uuid_str.len(), 36); // Standard UUID length with dashes
+    }
+
+    #[test]
+    fn test_developer_field_structure() {
+        use crate::models::DeveloperField;
+
+        let dev_field = DeveloperField {
+            developer_data_id: 0,
+            field_definition_number: 1,
+            field_name: "heart_rate_variability".to_string(),
+            fit_base_type_id: 2, // uint16
+            units: Some("ms".to_string()),
+            scale: Some(1000.0),
+            offset: Some(0.0),
+        };
+
+        assert_eq!(dev_field.field_name, "heart_rate_variability");
+        assert_eq!(dev_field.units, Some("ms".to_string()));
+
+        // Test value conversion
+        let raw_value = 45000.0; // 45000 ms raw
+        let converted = dev_field.apply_conversion(raw_value);
+        assert_eq!(converted, 45.0); // 45 ms after scale
+    }
+
+    #[test]
+    fn test_developer_field_conversion_without_scale() {
+        use crate::models::DeveloperField;
+
+        let dev_field = DeveloperField {
+            developer_data_id: 0,
+            field_definition_number: 2,
+            field_name: "power_balance".to_string(),
+            fit_base_type_id: 2,
+            units: Some("percent".to_string()),
+            scale: None, // No scale factor
+            offset: Some(-50.0),
+        };
+
+        let raw_value = 100.0;
+        let converted = dev_field.apply_conversion(raw_value);
+        assert_eq!(converted, 150.0); // 100 - (-50) = 150
+    }
+
+    #[test]
+    fn test_developer_field_serialization() {
+        use crate::models::{DeveloperDataId, DeveloperField};
+
+        // Test DeveloperField serialization
+        let dev_field = DeveloperField {
+            developer_data_id: 1,
+            field_definition_number: 5,
+            field_name: "custom_metric".to_string(),
+            fit_base_type_id: 7, // string
+            units: Some("custom_unit".to_string()),
+            scale: Some(10.0),
+            offset: Some(5.0),
+        };
+
+        let json = serde_json::to_string(&dev_field).unwrap();
+        assert!(json.contains("\"field_name\":\"custom_metric\""));
+        assert!(json.contains("\"units\":\"custom_unit\""));
+
+        let deserialized: DeveloperField = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.field_name, dev_field.field_name);
+        assert_eq!(deserialized.scale, dev_field.scale);
+
+        // Test DeveloperDataId serialization
+        let uuid_bytes: [u8; 16] = [0u8; 16];
+        let dev_data_id = DeveloperDataId {
+            developer_data_id: 2,
+            application_id: uuid_bytes,
+            manufacturer_id: Some(100),
+            developer_data_index: Some(1),
+        };
+
+        let json = serde_json::to_string(&dev_data_id).unwrap();
+        assert!(json.contains("\"developer_data_id\":2"));
+        assert!(json.contains("\"manufacturer_id\":100"));
+
+        let deserialized: DeveloperDataId = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.developer_data_id, dev_data_id.developer_data_id);
+        assert_eq!(deserialized.manufacturer_id, dev_data_id.manufacturer_id);
+    }
 }
