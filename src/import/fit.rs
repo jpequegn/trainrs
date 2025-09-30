@@ -565,6 +565,113 @@ impl FitImporter {
 
         developer_fields
     }
+
+    /// Parse Connect IQ custom metrics from developer fields
+    /// Recognizes popular Connect IQ app UUIDs and field names
+    fn parse_connect_iq_field(
+        &self,
+        field: &crate::models::DeveloperField,
+        value: f64,
+    ) -> Option<crate::models::ConnectIQMetric> {
+        use crate::models::ConnectIQMetric;
+
+        // Match based on field name (case-insensitive)
+        let field_name_lower = field.field_name.to_lowercase();
+
+        // Power balance and cycling metrics
+        if field_name_lower.contains("power") && field_name_lower.contains("balance") {
+            // Assume value is left percentage, calculate right
+            let left_percent = value;
+            let right_percent = 100.0 - left_percent;
+            return Some(ConnectIQMetric::PowerBalance {
+                left_percent,
+                right_percent,
+            });
+        }
+
+        if field_name_lower.contains("pedal") && field_name_lower.contains("smooth") {
+            // Value might be averaged or just left side
+            // For now, assume equal smoothness (would need paired field for full data)
+            return Some(ConnectIQMetric::PedalSmoothness {
+                left: value,
+                right: value,
+            });
+        }
+
+        // Running dynamics
+        if field_name_lower.contains("leg") && field_name_lower.contains("spring") {
+            return Some(ConnectIQMetric::LegSpringStiffness(value));
+        }
+
+        if field_name_lower.contains("form") && field_name_lower.contains("power") {
+            return Some(ConnectIQMetric::FormPower(value));
+        }
+
+        if field_name_lower.contains("running") && field_name_lower.contains("power") {
+            return Some(ConnectIQMetric::RunningPower(value as u16));
+        }
+
+        if (field_name_lower.contains("ground") || field_name_lower.contains("gct"))
+            && field_name_lower.contains("balance")
+        {
+            let left = value;
+            let right = 100.0 - left;
+            return Some(ConnectIQMetric::GroundContactBalance { left, right });
+        }
+
+        // Aerodynamics
+        if field_name_lower.contains("cda") || field_name_lower.contains("drag") {
+            return Some(ConnectIQMetric::AerodynamicCdA(value));
+        }
+
+        // Physiological
+        if field_name_lower.contains("core") && field_name_lower.contains("temp") {
+            return Some(ConnectIQMetric::CoreTemperature(value));
+        }
+
+        if field_name_lower.contains("smo2") || field_name_lower.contains("muscle")
+            && field_name_lower.contains("oxygen")
+        {
+            // If this is SmO2, we'd need the paired tHb value
+            // For now, just store SmO2
+            return Some(ConnectIQMetric::MuscleOxygen {
+                smo2: value,
+                thb: 0.0, // Would need paired field
+            });
+        }
+
+        // Environmental
+        if field_name_lower.contains("temperature") && !field_name_lower.contains("core") {
+            return Some(ConnectIQMetric::Environmental {
+                temperature: Some(value),
+                humidity: None,
+                air_quality: None,
+            });
+        }
+
+        if field_name_lower.contains("humidity") {
+            return Some(ConnectIQMetric::Environmental {
+                temperature: None,
+                humidity: Some(value),
+                air_quality: None,
+            });
+        }
+
+        if field_name_lower.contains("air") && field_name_lower.contains("quality") {
+            return Some(ConnectIQMetric::Environmental {
+                temperature: None,
+                humidity: None,
+                air_quality: Some(value),
+            });
+        }
+
+        // Fallback to custom metric
+        Some(ConnectIQMetric::Custom {
+            name: field.field_name.clone(),
+            value,
+            units: field.units.clone(),
+        })
+    }
 }
 
 impl ImportFormat for FitImporter {
