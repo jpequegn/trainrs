@@ -2,6 +2,7 @@
 
 use crate::models::Workout;
 use crate::pmc::PmcMetrics;
+use crate::power::{MmpCurve, KeyPowers};
 use super::ExportError;
 use rust_decimal::Decimal;
 use std::path::Path;
@@ -231,6 +232,57 @@ fn map_sport_to_training_peaks(sport: &crate::models::Sport) -> &'static str {
         crate::models::Sport::Rowing => "Row",
         crate::models::Sport::CrossTraining => "Other",
     }
+}
+
+/// Export Mean Maximal Power (MMP) curve to CSV format
+///
+/// Exports complete MMP curve showing maximal power for all durations.
+/// Suitable for plotting in Excel or analysis tools.
+pub fn export_mmp_curve<P: AsRef<Path>>(
+    mmp_curve: &MmpCurve,
+    output_path: P,
+) -> Result<(), ExportError> {
+    let mut file = std::fs::File::create(output_path)?;
+
+    // Write CSV header
+    writeln!(file, "Duration_Seconds,Duration_Minutes,Max_Power_Watts")?;
+
+    // Write MMP data
+    for (duration, power) in mmp_curve.duration_seconds.iter().zip(mmp_curve.max_power.iter()) {
+        let duration_minutes = *duration as f64 / 60.0;
+        writeln!(
+            file,
+            "{},{:.2},{}",
+            duration,
+            duration_minutes,
+            power
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Export key power values to CSV format
+///
+/// Exports the critical power durations (5s, 1min, 5min, 20min, 60min)
+/// that define physiological systems and training zones.
+pub fn export_key_powers<P: AsRef<Path>>(
+    key_powers: &KeyPowers,
+    output_path: P,
+) -> Result<(), ExportError> {
+    let mut file = std::fs::File::create(output_path)?;
+
+    // Write CSV header
+    writeln!(file, "Duration,Duration_Seconds,Power_Watts,System")?;
+
+    // Write key power data
+    writeln!(file, "5_seconds,5,{},Sprint", key_powers.sprint_5s)?;
+    writeln!(file, "1_minute,60,{},Anaerobic", key_powers.anaerobic_1min)?;
+    writeln!(file, "5_minutes,300,{},VO2max", key_powers.vo2max_5min)?;
+    writeln!(file, "20_minutes,1200,{},FTP", key_powers.ftp_20min)?;
+    writeln!(file, "60_minutes,3600,{},Threshold", key_powers.threshold_60min)?;
+
+    Ok(())
 }
 
 #[cfg(test)]

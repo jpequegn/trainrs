@@ -38,7 +38,37 @@ pub struct PowerCurvePoint {
     pub workout_id: String,
 }
 
+/// Mean Maximal Power curve for comprehensive power profiling
+/// Shows maximal average power sustained over all durations from 1 second to workout length
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MmpCurve {
+    /// All duration-power pairs from 1s to workout length
+    pub duration_seconds: Vec<u32>,
+    /// Maximal power for each duration
+    pub max_power: Vec<u16>,
+    /// Optional workout ID if from single workout
+    pub workout_id: Option<String>,
+    /// Date range for this curve
+    pub date_range: (NaiveDate, NaiveDate),
+}
+
+/// Key power durations for training zones and performance profiling
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct KeyPowers {
+    /// 5-second sprint power
+    pub sprint_5s: u16,
+    /// 1-minute anaerobic capacity
+    pub anaerobic_1min: u16,
+    /// 5-minute VO2max power
+    pub vo2max_5min: u16,
+    /// 20-minute FTP proxy
+    pub ftp_20min: u16,
+    /// 60-minute threshold power
+    pub threshold_60min: u16,
+}
+
 /// Power curve representing mean maximal power (MMP) across different durations
+/// Legacy structure - use MmpCurve for new implementations
 #[derive(Debug, Clone)]
 pub struct PowerCurve {
     /// Key durations and their maximum powers
@@ -48,6 +78,9 @@ pub struct PowerCurve {
     /// Date range for this power curve
     pub date_range: (NaiveDate, NaiveDate),
 }
+
+/// MMP Analyzer for calculating comprehensive power curves
+pub struct MmpAnalyzer;
 
 /// Critical Power model parameters
 #[derive(Debug, Clone)]
@@ -152,6 +185,194 @@ pub struct PowerBalance {
     pub right_percent: Decimal,
     /// Balance score (50 = perfect balance)
     pub balance_score: Decimal,
+}
+
+impl MmpAnalyzer {
+    /// Calculate Mean Maximal Power curve from a single workout's data points
+    ///
+    /// Generates MMP values for all durations from 1 second to the workout length.
+    /// Uses rolling window averaging to find the maximum average power for each duration.
+    ///
+    /// # Arguments
+    /// * `data_points` - Time-series power data from a workout
+    ///
+    /// # Returns
+    /// * `MmpCurve` containing duration-power pairs for all possible durations
+    pub fn calculate_mmp(data_points: &[DataPoint]) -> Result<MmpCurve> {
+        let power_data: Vec<u16> = data_points
+            .iter()
+            .filter_map(|dp| dp.power)
+            .collect();
+
+        if power_data.is_empty() {
+            return Err(anyhow!("No power data available for MMP calculation"));
+        }
+
+        let max_duration = power_data.len() as u32;
+        let mut duration_seconds = Vec::new();
+        let mut max_power = Vec::new();
+
+        // Calculate MMP for all durations from 1 second to workout length
+        for duration in 1..=max_duration {
+            if let Some(mmp) = Self::calculate_mmp_for_duration(&power_data, duration) {
+                duration_seconds.push(duration);
+                max_power.push(mmp);
+            }
+        }
+
+        // Extract date from first data point (assuming chronological order)
+        let date = chrono::Local::now().date_naive();
+
+        Ok(MmpCurve {
+            duration_seconds,
+            max_power,
+            workout_id: None,
+            date_range: (date, date),
+        })
+    }
+
+    /// Aggregate MMP curves across multiple workouts to find best efforts
+    ///
+    /// For each duration, finds the maximum power achieved across all provided workouts.
+    /// This creates a "personal best" MMP curve showing peak performance at each duration.
+    ///
+    /// # Arguments
+    /// * `workouts` - Collection of workouts to analyze
+    ///
+    /// # Returns
+    /// * `MmpCurve` with best power for each duration across all workouts
+    pub fn aggregate_mmp(workouts: &[Workout]) -> Result<MmpCurve> {
+        if workouts.is_empty() {
+            return Err(anyhow!("No workouts provided for MMP aggregation"));
+        }
+
+        let mut duration_power_map: HashMap<u32, u16> = HashMap::new();
+        let mut min_date = chrono::NaiveDate::from_ymd_opt(9999, 12, 31).unwrap();
+        let mut max_date = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+
+        // Process each workout to extract MMP values
+        for workout in workouts {
+            if let Some(raw_data) = &workout.raw_data {
+                let power_data: Vec<u16> = raw_data
+                    .iter()
+                    .filter_map(|dp| dp.power)
+                    .collect();
+
+                if power_data.is_empty() {
+                    continue;
+                }
+
+                // Calculate MMP for all durations in this workout
+                let max_duration = power_data.len() as u32;
+                for duration in 1..=max_duration {
+                    if let Some(mmp) = Self::calculate_mmp_for_duration(&power_data, duration) {
+                        let current_max = duration_power_map.get(&duration).copied().unwrap_or(0);
+                        if mmp > current_max {
+                            duration_power_map.insert(duration, mmp);
+                        }
+                    }
+                }
+
+                // Update date range
+                if workout.date < min_date {
+                    min_date = workout.date;
+                }
+                if workout.date > max_date {
+                    max_date = workout.date;
+                }
+            }
+        }
+
+        if duration_power_map.is_empty() {
+            return Err(anyhow!("No valid power data found in any workout"));
+        }
+
+        // Convert HashMap to sorted vectors
+        let mut durations: Vec<u32> = duration_power_map.keys().copied().collect();
+        durations.sort_unstable();
+
+        let powers: Vec<u16> = durations
+            .iter()
+            .map(|d| *duration_power_map.get(d).unwrap())
+            .collect();
+
+        Ok(MmpCurve {
+            duration_seconds: durations,
+            max_power: powers,
+            workout_id: None,
+            date_range: (min_date, max_date),
+        })
+    }
+
+    /// Extract key power values from an MMP curve
+    ///
+    /// Identifies critical durations (5s, 1min, 5min, 20min, 60min) that define
+    /// different physiological systems and training zones.
+    ///
+    /// # Arguments
+    /// * `curve` - MMP curve to extract key powers from
+    ///
+    /// # Returns
+    /// * `KeyPowers` struct with values for key durations
+    pub fn get_key_powers(curve: &MmpCurve) -> Result<KeyPowers> {
+        fn find_power_at_duration(curve: &MmpCurve, target_duration: u32) -> Result<u16> {
+            // Find exact match or nearest duration
+            if let Some(pos) = curve.duration_seconds.iter().position(|&d| d == target_duration) {
+                return Ok(curve.max_power[pos]);
+            }
+
+            // If no exact match, find the closest duration
+            let mut closest_idx = 0;
+            let mut min_diff = u32::MAX;
+
+            for (idx, &duration) in curve.duration_seconds.iter().enumerate() {
+                let diff = if duration > target_duration {
+                    duration - target_duration
+                } else {
+                    target_duration - duration
+                };
+
+                if diff < min_diff {
+                    min_diff = diff;
+                    closest_idx = idx;
+                }
+            }
+
+            if min_diff <= target_duration / 10 {
+                // Accept if within 10% of target duration
+                Ok(curve.max_power[closest_idx])
+            } else {
+                Err(anyhow!("No power data near {} seconds", target_duration))
+            }
+        }
+
+        Ok(KeyPowers {
+            sprint_5s: find_power_at_duration(curve, 5)?,
+            anaerobic_1min: find_power_at_duration(curve, 60)?,
+            vo2max_5min: find_power_at_duration(curve, 300)?,
+            ftp_20min: find_power_at_duration(curve, 1200)?,
+            threshold_60min: find_power_at_duration(curve, 3600)?,
+        })
+    }
+
+    /// Internal helper: Calculate MMP for a specific duration using rolling window
+    fn calculate_mmp_for_duration(power_data: &[u16], duration_seconds: u32) -> Option<u16> {
+        let window_size = duration_seconds as usize;
+
+        if power_data.len() < window_size {
+            return None;
+        }
+
+        let mut max_avg = 0u32;
+
+        for window in power_data.windows(window_size) {
+            let sum: u32 = window.iter().map(|&p| p as u32).sum();
+            let avg = sum / window_size as u32;
+            max_avg = max_avg.max(avg);
+        }
+
+        Some(max_avg as u16)
+    }
 }
 
 /// Main power analyzer struct
@@ -862,5 +1083,216 @@ mod tests {
         assert!((balance.left_percent - dec!(50)).abs() < dec!(1));
         assert!((balance.right_percent - dec!(50)).abs() < dec!(1));
         assert!(balance.balance_score > dec!(49));
+    }
+
+    // MMP-specific tests
+    #[test]
+    fn test_mmp_single_workout_calculation() {
+        let data = create_sample_power_data();
+        let mmp_curve = MmpAnalyzer::calculate_mmp(&data).unwrap();
+
+        // Verify we have MMP values for all durations
+        assert!(!mmp_curve.duration_seconds.is_empty());
+        assert_eq!(mmp_curve.duration_seconds.len(), mmp_curve.max_power.len());
+
+        // Verify power values are reasonable
+        for power in &mmp_curve.max_power {
+            assert!(*power > 0);
+            assert!(*power < 1000); // Sanity check for unrealistic power values
+        }
+
+        // Verify MMP is decreasing with duration (power should decrease as duration increases)
+        // Check a few key durations
+        if let Some(pos_5s) = mmp_curve.duration_seconds.iter().position(|&d| d == 5) {
+            if let Some(pos_60s) = mmp_curve.duration_seconds.iter().position(|&d| d == 60) {
+                assert!(mmp_curve.max_power[pos_5s] >= mmp_curve.max_power[pos_60s]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_mmp_aggregate_workouts() {
+        use crate::models::{DataSource, Sport, WorkoutSummary, WorkoutType};
+
+        // Create multiple workouts with power data
+        let mut workouts = Vec::new();
+
+        for i in 0..3 {
+            let data_points = (0..600).map(|j| {
+                let power = 200 + (i * 20) + ((j as f32 * 0.1).sin() * 30.0) as u16;
+                DataPoint {
+                    timestamp: j,
+                    power: Some(power),
+                    heart_rate: Some(150),
+                    pace: None,
+                    elevation: None,
+                    cadence: Some(90),
+                    speed: None,
+                    distance: Some(rust_decimal::Decimal::from(j * 10)),
+                    left_power: None,
+                    right_power: None,
+                    ground_contact_time: None,
+                    vertical_oscillation: None,
+                    stride_length: None,
+                    stroke_count: None,
+                    stroke_type: None,
+                    lap_number: None,
+                    sport_transition: None,
+                }
+            }).collect();
+
+            workouts.push(crate::models::Workout {
+                id: format!("workout_{}", i),
+                date: NaiveDate::from_ymd_opt(2024, 9, (1 + i) as u32).unwrap(),
+                sport: Sport::Cycling,
+                duration_seconds: 600,
+                workout_type: WorkoutType::Interval,
+                data_source: DataSource::Power,
+                raw_data: Some(data_points),
+                summary: WorkoutSummary::default(),
+                notes: None,
+                athlete_id: None,
+                source: None,
+            });
+        }
+
+        let mmp_curve = MmpAnalyzer::aggregate_mmp(&workouts).unwrap();
+
+        // Verify aggregation worked
+        assert!(!mmp_curve.duration_seconds.is_empty());
+        assert_eq!(mmp_curve.duration_seconds.len(), mmp_curve.max_power.len());
+
+        // Verify date range spans all workouts
+        assert_eq!(mmp_curve.date_range.0, NaiveDate::from_ymd_opt(2024, 9, 1).unwrap());
+        assert_eq!(mmp_curve.date_range.1, NaiveDate::from_ymd_opt(2024, 9, 3).unwrap());
+    }
+
+    #[test]
+    fn test_key_powers_extraction() {
+        // Create a comprehensive MMP curve
+        let mut duration_seconds = Vec::new();
+        let mut max_power = Vec::new();
+
+        // Generate MMP curve with decreasing power over duration
+        // Using a hyperbolic decay model: power = base_power + decay_factor / sqrt(duration)
+        for duration in 1..=3600 {
+            duration_seconds.push(duration);
+            let base_power = 250.0;
+            let decay_factor = 500.0;
+            let power = (base_power + decay_factor / (duration as f64).sqrt()) as u16;
+            max_power.push(power);
+        }
+
+        let mmp_curve = MmpCurve {
+            duration_seconds,
+            max_power,
+            workout_id: None,
+            date_range: (
+                NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 1, 31).unwrap(),
+            ),
+        };
+
+        let key_powers = MmpAnalyzer::get_key_powers(&mmp_curve).unwrap();
+
+        // Verify key powers are extracted
+        assert!(key_powers.sprint_5s > 0);
+        assert!(key_powers.anaerobic_1min > 0);
+        assert!(key_powers.vo2max_5min > 0);
+        assert!(key_powers.ftp_20min > 0);
+        assert!(key_powers.threshold_60min > 0);
+
+        // Verify power decreases with duration
+        assert!(key_powers.sprint_5s >= key_powers.anaerobic_1min);
+        assert!(key_powers.anaerobic_1min >= key_powers.vo2max_5min);
+        assert!(key_powers.vo2max_5min >= key_powers.ftp_20min);
+        assert!(key_powers.ftp_20min >= key_powers.threshold_60min);
+    }
+
+    #[test]
+    fn test_mmp_for_duration_calculation() {
+        let power_data = vec![100, 200, 300, 400, 500, 400, 300, 200, 100];
+
+        // Test 1-second MMP (should be max value)
+        let mmp_1s = MmpAnalyzer::calculate_mmp_for_duration(&power_data, 1).unwrap();
+        assert_eq!(mmp_1s, 500);
+
+        // Test 3-second MMP
+        let mmp_3s = MmpAnalyzer::calculate_mmp_for_duration(&power_data, 3).unwrap();
+        assert_eq!(mmp_3s, 433); // (400+500+400)/3 = 433
+
+        // Test 5-second MMP
+        let mmp_5s = MmpAnalyzer::calculate_mmp_for_duration(&power_data, 5).unwrap();
+        assert_eq!(mmp_5s, 380); // (300+400+500+400+300)/5 = 380
+    }
+
+    #[test]
+    fn test_mmp_insufficient_data() {
+        let power_data = vec![100, 200];
+
+        // Should return None when duration > data length
+        let result = MmpAnalyzer::calculate_mmp_for_duration(&power_data, 5);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_key_powers_missing_duration() {
+        // Create MMP curve without 60-minute data
+        let mmp_curve = MmpCurve {
+            duration_seconds: vec![5, 60, 300, 1200],
+            max_power: vec![800, 450, 350, 280],
+            workout_id: None,
+            date_range: (
+                NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 1, 31).unwrap(),
+            ),
+        };
+
+        // Should fail because 60min duration is missing
+        let result = MmpAnalyzer::get_key_powers(&mmp_curve);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mmp_curve_serialization() {
+        let mmp_curve = MmpCurve {
+            duration_seconds: vec![5, 60, 300],
+            max_power: vec![800, 450, 350],
+            workout_id: Some("test_workout".to_string()),
+            date_range: (
+                NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 1, 31).unwrap(),
+            ),
+        };
+
+        // Test JSON serialization
+        let json = serde_json::to_string(&mmp_curve).unwrap();
+        assert!(json.contains("\"duration_seconds\""));
+        assert!(json.contains("\"max_power\""));
+
+        // Test deserialization
+        let deserialized: MmpCurve = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.duration_seconds, mmp_curve.duration_seconds);
+        assert_eq!(deserialized.max_power, mmp_curve.max_power);
+    }
+
+    #[test]
+    fn test_key_powers_serialization() {
+        let key_powers = KeyPowers {
+            sprint_5s: 800,
+            anaerobic_1min: 450,
+            vo2max_5min: 350,
+            ftp_20min: 280,
+            threshold_60min: 250,
+        };
+
+        // Test JSON serialization
+        let json = serde_json::to_string(&key_powers).unwrap();
+        assert!(json.contains("\"sprint_5s\":800"));
+        assert!(json.contains("\"threshold_60min\":250"));
+
+        // Test deserialization
+        let deserialized: KeyPowers = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, key_powers);
     }
 }
