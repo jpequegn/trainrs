@@ -4,8 +4,10 @@
 pub mod config;
 pub mod database;
 pub mod data_management;
+pub mod error;
 pub mod export;
 pub mod import;
+pub mod logging;
 pub mod models;
 pub mod multisport;
 pub mod performance;
@@ -28,3 +30,5 @@ pub use pmc::PmcCalculator;
 pub use training_effect::TrainingEffectAnalyzer;
 pub use zones::ZoneCalculator;
 pub use export::ml::{MlCsvExporter, SplitConfig, SplitType};
+pub use error::{TrainRsError, Result};
+pub use logging::{LogConfig, LogLevel, LogFormat, DiagnosticReport};

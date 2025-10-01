@@ -21,6 +21,8 @@ mod running;
 mod training_plan;
 mod tss;
 mod zones;
+mod error;
+mod logging;
 mod training_effect;
 mod vo2max;
 
