@@ -3,7 +3,7 @@
 //! Exports training data in ML-ready formats with engineered features for
 //! external analysis, predictive modeling, and data science workflows.
 
-use crate::models::{AthleteProfile, DataPoint, Sport, Workout};
+use crate::models::{AthleteProfile, Workout};
 use chrono::{Datelike, NaiveDate};
 use csv::Writer;
 use std::collections::HashMap;
@@ -531,6 +531,7 @@ fn format_optional_f64(value: Option<f64>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{DataPoint, Sport};
     use rust_decimal_macros::dec;
 
     fn create_test_athlete() -> AthleteProfile {

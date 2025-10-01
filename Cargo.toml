@@ -24,6 +24,9 @@ thiserror = "1.0"
 statrs = "0.17"
 tabled = "0.16"
 colored = "2.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+tracing-appender = "0.2"
 plotters = { version = "0.3", optional = true }
 quick-xml = "0.31"
 gpx = "0.10"
