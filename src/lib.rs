@@ -15,6 +15,7 @@ pub mod running;
 pub mod swimming;
 pub mod training_plan;
 pub mod tss;
+pub mod vo2max;
 pub mod zones;
 
 // Test utilities have been integrated into individual test files
