@@ -21,6 +21,8 @@ mod running;
 mod training_plan;
 mod tss;
 mod zones;
+mod training_effect;
+mod vo2max;
 
 // Test utilities have been integrated into individual test files
 
