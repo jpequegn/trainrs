@@ -9,6 +9,7 @@ use thiserror::Error;
 
 pub mod csv;
 pub mod json;
+pub mod ml;
 pub mod text;
 
 /// Export format types
