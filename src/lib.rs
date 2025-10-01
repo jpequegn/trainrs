@@ -13,6 +13,7 @@ pub mod multisport;
 pub mod performance;
 pub mod pmc;
 pub mod power;
+pub mod recovery;
 pub mod running;
 pub mod swimming;
 pub mod training_effect;
