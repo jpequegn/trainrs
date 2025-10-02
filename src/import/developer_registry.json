@@ -361,6 +361,94 @@
           "description": "Training zone based on muscle oxygen"
         }
       ]
+    },
+    "6789abcd-ef01-4234-5678-9abcdef01234": {
+      "uuid": "6789abcd-ef01-4234-5678-9abcdef01234",
+      "name": "HRV4Training",
+      "manufacturer": "HRV4Training",
+      "version": "1.0",
+      "fields": [
+        {
+          "field_number": 0,
+          "name": "rmssd",
+          "data_type": "uint16",
+          "units": "ms",
+          "scale": 1.0,
+          "description": "RMSSD heart rate variability"
+        },
+        {
+          "field_number": 1,
+          "name": "hrv_score",
+          "data_type": "uint8",
+          "units": "score",
+          "scale": 1.0,
+          "description": "HRV readiness score (0-100)"
+        },
+        {
+          "field_number": 2,
+          "name": "recovery_points",
+          "data_type": "sint8",
+          "units": "points",
+          "scale": 1.0,
+          "description": "Recovery points relative to baseline"
+        },
+        {
+          "field_number": 3,
+          "name": "morning_hr",
+          "data_type": "uint8",
+          "units": "bpm",
+          "scale": 1.0,
+          "description": "Morning resting heart rate"
+        }
+      ]
+    },
+    "789abcde-f012-4345-6789-abcdef012345": {
+      "uuid": "789abcde-f012-4345-6789-abcdef012345",
+      "name": "Elite HRV",
+      "manufacturer": "Elite HRV",
+      "version": "2.0",
+      "fields": [
+        {
+          "field_number": 0,
+          "name": "rmssd",
+          "data_type": "float32",
+          "units": "ms",
+          "scale": 1.0,
+          "description": "RMSSD heart rate variability"
+        },
+        {
+          "field_number": 1,
+          "name": "ln_rmssd",
+          "data_type": "float32",
+          "units": "ln(ms)",
+          "scale": 1.0,
+          "description": "Natural log of RMSSD"
+        },
+        {
+          "field_number": 2,
+          "name": "readiness_score",
+          "data_type": "uint8",
+          "units": "score",
+          "scale": 1.0,
+          "description": "Morning readiness score (0-10)"
+        },
+        {
+          "field_number": 3,
+          "name": "hrv_baseline",
+          "data_type": "float32",
+          "units": "ms",
+          "scale": 1.0,
+          "description": "7-day rolling HRV baseline"
+        },
+        {
+          "field_number": 4,
+          "name": "coefficient_variation",
+          "data_type": "float32",
+          "units": "%",
+          "scale": 1.0,
+          "description": "Coefficient of variation"
+        }
+      ]
     }
   }
 }

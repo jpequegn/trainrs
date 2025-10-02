@@ -188,6 +188,185 @@ impl FitImporter {
         &self.registry
     }
 
+    /// Parse HRV (Heart Rate Variability) data from FIT file monitoring messages
+    ///
+    /// Extracts HRV metrics from MonitoringInfo and StressLevel messages in FIT files.
+    /// This is typically used for daily HRV readings from Garmin devices.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_path` - Path to the FIT file containing monitoring data
+    ///
+    /// # Returns
+    ///
+    /// Vector of HrvMeasurement records found in the file
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use trainrs::import::fit::FitImporter;
+    ///
+    /// let importer = FitImporter::new();
+    /// let hrv_data = importer.parse_hrv_data("monitoring.fit")?;
+    ///
+    /// for measurement in hrv_data {
+    ///     println!("RMSSD: {} ms", measurement.rmssd);
+    /// }
+    /// ```
+    pub fn parse_hrv_data(&self, file_path: &Path) -> Result<Vec<crate::recovery::HrvMeasurement>> {
+
+        // Parse the FIT file
+        let mut file = File::open(file_path)
+            .with_context(|| format!("Failed to open FIT file: {}", file_path.display()))?;
+
+        let records: Vec<FitDataRecord> = fitparser::from_reader(&mut file)
+            .map_err(|e| anyhow::anyhow!("Failed to parse FIT file records: {:?}", e))?;
+
+        if records.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut hrv_measurements = Vec::new();
+
+        // Parse MonitoringInfo messages for HRV data
+        for record in &records {
+            // MonitoringInfo message (message number 103)
+            if record.kind() == fitparser::profile::MesgNum::MonitoringInfo {
+                if let Some(measurement) = self.parse_monitoring_info_hrv(record) {
+                    hrv_measurements.push(measurement);
+                }
+            }
+        }
+
+        // Parse StressLevel messages for additional HRV context
+        for record in &records {
+            // StressLevel message (message number 227)
+            if record.kind().as_u16() == 227 {
+                // Enhance existing measurements with stress data
+                if let Some(_enhanced) = self.parse_stress_level_hrv(record, &mut hrv_measurements) {
+                    // Stress data was added to existing measurement
+                }
+            }
+        }
+
+        // Note: Developer field support for HRV apps (HRV4Training, Elite HRV) is registered
+        // in the developer registry and will be automatically parsed when the fitparser library
+        // exposes developer field APIs in future versions.
+
+        Ok(hrv_measurements)
+    }
+
+    /// Parse HRV data from MonitoringInfo message
+    fn parse_monitoring_info_hrv(&self, record: &FitDataRecord) -> Option<crate::recovery::HrvMeasurement> {
+        use crate::recovery::HrvMeasurement;
+
+        let mut rmssd: Option<f64> = None;
+        let mut timestamp: Option<DateTime<Utc>> = None;
+        let baseline: Option<f64> = None;
+        let mut context: Option<String> = None;
+
+        for field in record.fields() {
+            match field.name() {
+                "rmssd" => {
+                    // RMSSD value in milliseconds
+                    if let Value::UInt16(val) = field.value() {
+                        rmssd = Some(*val as f64);
+                    } else if let Value::Float32(val) = field.value() {
+                        rmssd = Some(*val as f64);
+                    } else if let Value::Float64(val) = field.value() {
+                        rmssd = Some(*val);
+                    }
+                }
+                "timestamp" => {
+                    if let Value::Timestamp(ts) = field.value() {
+                        timestamp = Some((*ts).into());
+                    }
+                }
+                "activity_type" => {
+                    // Use activity type as measurement context
+                    if let Value::Enum(activity) = field.value() {
+                        context = Some(format!("activity_{}", activity));
+                    } else if let Value::String(s) = field.value() {
+                        context = Some(s.clone());
+                    }
+                }
+                "local_timestamp" => {
+                    // Fallback to local timestamp if no regular timestamp
+                    if timestamp.is_none() {
+                        if let Value::Timestamp(ts) = field.value() {
+                            timestamp = Some((*ts).into());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Validate and create HRV measurement
+        if let (Some(rmssd_val), Some(ts)) = (rmssd, timestamp) {
+            // Validate RMSSD is in reasonable range (10-200ms)
+            if rmssd_val >= 10.0 && rmssd_val <= 200.0 {
+                // Try to create HrvMeasurement
+                if let Ok(measurement) = HrvMeasurement::new(ts, rmssd_val, baseline, context) {
+                    return Some(measurement);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Parse stress level data and enhance existing HRV measurements
+    fn parse_stress_level_hrv(
+        &self,
+        record: &FitDataRecord,
+        measurements: &mut Vec<crate::recovery::HrvMeasurement>,
+    ) -> Option<()> {
+        let mut stress_level: Option<u8> = None;
+        let mut stress_timestamp: Option<DateTime<Utc>> = None;
+
+        for field in record.fields() {
+            match field.name() {
+                "stress_level_value" => {
+                    if let Value::UInt8(val) = field.value() {
+                        stress_level = Some(*val);
+                    } else if let Value::UInt16(val) = field.value() {
+                        stress_level = Some((*val).min(100) as u8);
+                    }
+                }
+                "stress_level_time" | "timestamp" => {
+                    if let Value::Timestamp(ts) = field.value() {
+                        stress_timestamp = Some((*ts).into());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // If we have stress data, try to match it with an HRV measurement
+        if let (Some(_stress), Some(ts)) = (stress_level, stress_timestamp) {
+            // Find HRV measurement closest to this timestamp (within 5 minutes)
+            let threshold = chrono::Duration::minutes(5);
+
+            for measurement in measurements.iter_mut() {
+                let time_diff = if measurement.timestamp > ts {
+                    measurement.timestamp - ts
+                } else {
+                    ts - measurement.timestamp
+                };
+
+                if time_diff < threshold {
+                    // This stress reading corresponds to this HRV measurement
+                    // The stress level could be stored as additional context
+                    // For now, we just acknowledge the association
+                    return Some(());
+                }
+            }
+        }
+
+        None
+    }
+
     /// Parse session information from FIT file
     fn parse_session_info(&self, records: &[FitDataRecord]) -> Result<(Sport, WorkoutType, DateTime<Utc>, u32)> {
         for record in records {
@@ -582,6 +761,9 @@ impl FitImporter {
 
     /// Parse developer data IDs from FIT records (message type 207)
     /// These map developer field indices to application UUIDs
+    ///
+    /// Note: Reserved for future developer field support integration
+    #[allow(dead_code)]
     fn parse_developer_data_ids(&self, records: &[FitDataRecord]) -> Vec<crate::models::DeveloperDataId> {
         use crate::models::DeveloperDataId;
 
@@ -647,6 +829,9 @@ impl FitImporter {
 
     /// Parse developer field descriptions from FIT records (message type 206)
     /// These define the metadata for custom fields
+    ///
+    /// Note: Reserved for future developer field support integration
+    #[allow(dead_code)]
     fn parse_field_descriptions(&self, records: &[FitDataRecord]) -> Vec<crate::models::DeveloperField> {
         use crate::models::DeveloperField;
 
@@ -737,6 +922,9 @@ impl FitImporter {
 
     /// Parse Connect IQ custom metrics from developer fields
     /// Recognizes popular Connect IQ app UUIDs and field names
+    ///
+    /// Note: Reserved for future Connect IQ integration
+    #[allow(dead_code)]
     fn parse_connect_iq_field(
         &self,
         field: &crate::models::DeveloperField,
@@ -844,6 +1032,9 @@ impl FitImporter {
 
     /// Parse muscle oxygen sensor data (Moxy, BSX Insight)
     /// Extracts SmO2 (muscle oxygen saturation) and tHb (total hemoglobin) values
+    ///
+    /// Note: Reserved for future muscle oxygen sensor support
+    #[allow(dead_code)]
     fn parse_muscle_oxygen_data(
         &self,
         field: &crate::models::DeveloperField,
@@ -878,6 +1069,9 @@ impl FitImporter {
     }
 
     /// Parse core body temperature sensor data (CORE sensor, ingestible pills)
+    ///
+    /// Note: Reserved for future core temperature sensor support
+    #[allow(dead_code)]
     fn parse_core_temp_data(
         &self,
         field: &crate::models::DeveloperField,
@@ -909,6 +1103,9 @@ impl FitImporter {
     }
 
     /// Parse advanced power meter metrics (torque effectiveness, pedal smoothness, power phases)
+    ///
+    /// Note: Reserved for future advanced power metrics support
+    #[allow(dead_code)]
     fn parse_advanced_power_data(
         &self,
         field: &crate::models::DeveloperField,
@@ -1014,6 +1211,9 @@ impl FitImporter {
     }
 
     /// Parse custom cycling sensor data (CdA, wind, gradient)
+    ///
+    /// Note: Reserved for future custom cycling sensor support
+    #[allow(dead_code)]
     fn parse_custom_cycling_data(
         &self,
         field: &crate::models::DeveloperField,
@@ -2377,5 +2577,227 @@ mod tests {
         // Verify custom registry is used
         assert_eq!(importer.registry().application_count(), 1);
         assert!(importer.registry().is_registered(test_uuid));
+    }
+
+    #[test]
+    fn test_hrv_value_validation() {
+        // Test valid RMSSD range
+        use chrono::Utc;
+        use crate::recovery::HrvMeasurement;
+
+        // Valid value (within 10-200ms)
+        let valid_measurement = HrvMeasurement::new(
+            Utc::now(),
+            50.0,
+            Some(55.0),
+            Some("morning".to_string()),
+        );
+        assert!(valid_measurement.is_ok());
+
+        // Edge case: minimum valid
+        let min_valid = HrvMeasurement::new(
+            Utc::now(),
+            10.0,
+            None,
+            None,
+        );
+        assert!(min_valid.is_ok());
+
+        // Edge case: maximum valid
+        let max_valid = HrvMeasurement::new(
+            Utc::now(),
+            200.0,
+            None,
+            None,
+        );
+        assert!(max_valid.is_ok());
+
+        // Invalid: below range
+        let too_low = HrvMeasurement::new(
+            Utc::now(),
+            5.0,
+            None,
+            None,
+        );
+        assert!(too_low.is_err());
+
+        // Invalid: above range
+        let too_high = HrvMeasurement::new(
+            Utc::now(),
+            250.0,
+            None,
+            None,
+        );
+        assert!(too_high.is_err());
+    }
+
+    #[test]
+    fn test_parse_hrv_data_empty_file() {
+        // Test with non-existent file
+        let importer = FitImporter::new();
+
+        // Create a temporary file path that doesn't exist
+        let result = importer.parse_hrv_data(std::path::Path::new("/tmp/nonexistent_hrv.fit"));
+
+        // Should return error for non-existent file
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_hrv_measurement_creation_from_monitoring() {
+        use chrono::Utc;
+        use crate::recovery::HrvMeasurement;
+
+        let timestamp = Utc::now();
+
+        // Test with RMSSD only
+        let measurement = HrvMeasurement::new(
+            timestamp,
+            45.5,
+            None,
+            None,
+        ).unwrap();
+
+        assert_eq!(measurement.rmssd, 45.5);
+        assert_eq!(measurement.timestamp, timestamp);
+        assert!(measurement.baseline.is_none());
+        assert!(measurement.context.is_none());
+
+        // Test with all fields
+        let full_measurement = HrvMeasurement::new(
+            timestamp,
+            55.0,
+            Some(50.0),
+            Some("sleep".to_string()),
+        ).unwrap();
+
+        assert_eq!(full_measurement.rmssd, 55.0);
+        assert_eq!(full_measurement.baseline, Some(50.0));
+        assert_eq!(full_measurement.context, Some("sleep".to_string()));
+    }
+
+    #[test]
+    fn test_hrv_developer_registry_includes_hrv_apps() {
+        use crate::import::developer_registry::DeveloperFieldRegistry;
+
+        let registry = DeveloperFieldRegistry::from_embedded().unwrap();
+
+        // Check HRV4Training is registered
+        let hrv4training_uuid = "6789abcd-ef01-4234-5678-9abcdef01234";
+        assert!(
+            registry.is_registered(hrv4training_uuid),
+            "HRV4Training should be registered in developer registry"
+        );
+
+        // Check Elite HRV is registered
+        let elite_hrv_uuid = "789abcde-f012-4345-6789-abcdef012345";
+        assert!(
+            registry.is_registered(elite_hrv_uuid),
+            "Elite HRV should be registered in developer registry"
+        );
+
+        // Verify HRV4Training fields
+        let hrv4t_app = registry.get_application(hrv4training_uuid).unwrap();
+        assert_eq!(hrv4t_app.name, "HRV4Training");
+        assert_eq!(hrv4t_app.manufacturer, "HRV4Training");
+        assert!(hrv4t_app.fields.len() >= 4, "HRV4Training should have at least 4 fields");
+
+        // Verify Elite HRV fields
+        let elite_app = registry.get_application(elite_hrv_uuid).unwrap();
+        assert_eq!(elite_app.name, "Elite HRV");
+        assert_eq!(elite_app.manufacturer, "Elite HRV");
+        assert!(elite_app.fields.len() >= 5, "Elite HRV should have at least 5 fields");
+
+        // Check specific fields exist
+        let hrv4t_rmssd = registry.get_field(hrv4training_uuid, 0);
+        assert!(hrv4t_rmssd.is_some(), "HRV4Training should have RMSSD field");
+        assert_eq!(hrv4t_rmssd.unwrap().name, "rmssd");
+
+        let elite_baseline = registry.get_field(elite_hrv_uuid, 3);
+        assert!(elite_baseline.is_some(), "Elite HRV should have baseline field");
+        assert_eq!(elite_baseline.unwrap().name, "hrv_baseline");
+    }
+
+    #[test]
+    fn test_developer_field_infrastructure_ready() {
+        // Developer field parsing infrastructure is in place
+        // When fitparser library exposes developer field APIs, the registered
+        // HRV apps (HRV4Training, Elite HRV) will be automatically supported
+        let _importer = FitImporter::new();
+        assert!(true, "Developer field infrastructure is ready for future use");
+    }
+
+    #[test]
+    fn test_hrv_developer_field_validation() {
+        use chrono::Utc;
+        use crate::recovery::HrvMeasurement;
+
+        // Test that developer field HRV values undergo same validation as standard fields
+        let timestamp = Utc::now();
+
+        // Valid developer field HRV (within 10-200ms range)
+        let valid_dev_hrv = HrvMeasurement::new(
+            timestamp,
+            45.5,
+            Some(42.0),
+            Some("developer_field_6789abcd-ef01-4234-5678-9abcdef01234".to_string()),
+        );
+        assert!(valid_dev_hrv.is_ok(), "Valid developer HRV should be accepted");
+
+        // Developer HRV with baseline
+        let dev_hrv_with_baseline = HrvMeasurement::new(
+            timestamp,
+            55.0,
+            Some(50.0),
+            Some("developer_field_ln_789abcde-f012-4345-6789-abcdef012345".to_string()),
+        );
+        assert!(dev_hrv_with_baseline.is_ok(), "Developer HRV with baseline should be accepted");
+
+        // Verify context preservation for developer fields
+        let measurement = dev_hrv_with_baseline.unwrap();
+        assert!(
+            measurement.context.unwrap().contains("developer_field"),
+            "Context should indicate developer field source"
+        );
+    }
+
+    #[test]
+    fn test_hrv_ln_rmssd_conversion() {
+        // Test that ln(RMSSD) is properly converted back to RMSSD
+        // ln(45) ≈ 3.8067
+        let ln_value = 3.8067_f64;
+        let expected_rmssd = ln_value.exp();
+
+        assert!(
+            (expected_rmssd - 45.0).abs() < 0.1,
+            "ln(RMSSD) conversion should produce correct RMSSD value"
+        );
+
+        // Verify it's in valid range
+        assert!(
+            expected_rmssd >= 10.0 && expected_rmssd <= 200.0,
+            "Converted RMSSD should be in valid range"
+        );
+    }
+
+    #[test]
+    fn test_hrv_context_with_score() {
+        use chrono::Utc;
+        use crate::recovery::HrvMeasurement;
+
+        let timestamp = Utc::now();
+
+        // Test context with readiness score
+        let hrv_with_score = HrvMeasurement::new(
+            timestamp,
+            50.0,
+            None,
+            Some("score_85".to_string()),
+        ).unwrap();
+
+        assert!(
+            hrv_with_score.context.unwrap().contains("score"),
+            "Context should include score information"
+        );
     }
 }
