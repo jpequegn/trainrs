@@ -1,8 +1,8 @@
-//! Recovery, HRV, Sleep, Body Battery, and Physiological Monitoring
+//! Recovery, HRV, Sleep, Body Battery, Physiological Monitoring, and Unified Metrics
 //!
 //! This module provides comprehensive data structures and functionality for tracking athlete
 //! recovery through Heart Rate Variability (HRV), sleep analysis, Body Battery energy tracking,
-//! and physiological monitoring.
+//! physiological monitoring, and unified recovery metrics with training readiness assessment.
 //!
 //! # Sports Science Background
 //!
@@ -1213,6 +1213,357 @@ impl fmt::Display for PhysiologicalValidationError {
 
 impl std::error::Error for PhysiologicalValidationError {}
 
+//
+// ============================================================================
+// UNIFIED RECOVERY METRICS
+// ============================================================================
+//
+
+/// Unified daily recovery metrics aggregating all recovery data
+///
+/// # Purpose
+///
+/// RecoveryMetrics provides a comprehensive view of an athlete's recovery status
+/// by combining multiple data sources:
+///
+/// - **HRV Metrics**: Autonomic nervous system balance
+/// - **Sleep Data**: Sleep quality and duration
+/// - **Body Battery**: Energy reserves
+/// - **Physiological Metrics**: Health indicators (HR, respiration, SpO2, stress)
+///
+/// # Training Readiness
+///
+/// The training readiness score (0-100) combines multiple recovery indicators:
+/// - HRV status and baseline comparison (30%)
+/// - Sleep quality and duration (25%)
+/// - Body Battery level (25%)
+/// - Stress and physiological markers (20%)
+///
+/// Higher scores indicate better readiness for intense training.
+///
+/// # Recovery Quality
+///
+/// Overall recovery quality assessment:
+/// - **Excellent** (90-100): Full recovery, ready for hard training
+/// - **Good** (70-89): Well recovered, normal training recommended
+/// - **Fair** (50-69): Partial recovery, consider lighter training
+/// - **Poor** (<50): Inadequate recovery, prioritize rest
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecoveryMetrics {
+    /// Date of these recovery metrics
+    pub date: chrono::NaiveDate,
+    /// HRV measurements and status
+    pub hrv_metrics: Option<HrvMetrics>,
+    /// Sleep analysis data
+    pub sleep_data: Option<SleepMetrics>,
+    /// Body Battery energy tracking
+    pub body_battery: Option<BodyBatteryData>,
+    /// Physiological monitoring metrics
+    pub physiological: Option<PhysiologicalMetrics>,
+    /// Composite training readiness score (0-100)
+    pub training_readiness: Option<u8>,
+    /// Overall recovery quality assessment
+    pub recovery_quality: Option<RecoveryQuality>,
+}
+
+impl RecoveryMetrics {
+    /// Create new recovery metrics for a specific date
+    pub fn new(date: chrono::NaiveDate) -> Self {
+        RecoveryMetrics {
+            date,
+            hrv_metrics: None,
+            sleep_data: None,
+            body_battery: None,
+            physiological: None,
+            training_readiness: None,
+            recovery_quality: None,
+        }
+    }
+
+    /// Calculate training readiness score from available metrics
+    ///
+    /// # Algorithm
+    ///
+    /// Readiness score is calculated as a weighted average of:
+    /// - HRV contribution (30%): Based on HRV status and score
+    /// - Sleep contribution (25%): Based on sleep score and duration
+    /// - Energy contribution (25%): Based on Body Battery level
+    /// - Stress contribution (20%): Based on stress and physiological markers
+    ///
+    /// Missing metrics reduce the total possible score proportionally.
+    pub fn calculate_readiness(&mut self) {
+        let mut total_score = 0.0;
+        let mut total_weight = 0.0;
+
+        // HRV contribution (30% weight)
+        if let Some(hrv) = &self.hrv_metrics {
+            let hrv_score = match hrv.status {
+                Some(HrvStatus::Balanced) => 100.0,
+                Some(HrvStatus::Unbalanced) => 65.0,
+                Some(HrvStatus::Poor) => 30.0,
+                Some(HrvStatus::NoReading) | None => {
+                    // Use raw score if available
+                    hrv.score.map(|s| s as f64).unwrap_or(50.0)
+                }
+            };
+            total_score += hrv_score * 0.30;
+            total_weight += 0.30;
+        }
+
+        // Sleep contribution (25% weight)
+        if let Some(sleep) = &self.sleep_data {
+            if let Some(score) = sleep.sleep_score {
+                total_score += score as f64 * 0.25;
+                total_weight += 0.25;
+            }
+        }
+
+        // Energy contribution (25% weight)
+        if let Some(battery) = &self.body_battery {
+            // Use end level as current energy state
+            total_score += battery.end_level as f64 * 0.25;
+            total_weight += 0.25;
+        }
+
+        // Stress contribution (20% weight) - inverted stress score
+        if let Some(phys) = &self.physiological {
+            let stress_contribution = if let Some(stress) = phys.stress_score {
+                // Invert stress: low stress = high contribution
+                (100 - stress) as f64
+            } else {
+                // Default to neutral if no stress data
+                70.0
+            };
+            total_score += stress_contribution * 0.20;
+            total_weight += 0.20;
+        }
+
+        // Calculate final readiness score, scaling by available data
+        if total_weight > 0.0 {
+            // Scale to 0-100 based on available metrics
+            let readiness = (total_score / total_weight).min(100.0).max(0.0) as u8;
+            self.training_readiness = Some(readiness);
+            self.recovery_quality = Some(RecoveryQuality::from_readiness(readiness));
+        }
+    }
+
+    /// Check if athlete is ready for hard training
+    pub fn is_ready_for_hard_training(&self) -> bool {
+        self.training_readiness
+            .map(|r| r >= 75)
+            .unwrap_or(false)
+    }
+
+    /// Check if recovery is concerning
+    pub fn has_recovery_concerns(&self) -> bool {
+        // Check if any metric indicates concern
+        let hrv_concern = self.hrv_metrics
+            .as_ref()
+            .and_then(|h| h.status)
+            .map(|s| s == HrvStatus::Poor)
+            .unwrap_or(false);
+
+        let sleep_concern = self.sleep_data
+            .as_ref()
+            .and_then(|s| s.sleep_score)
+            .map(|s| s < 50)
+            .unwrap_or(false);
+
+        let battery_concern = self.body_battery
+            .as_ref()
+            .map(|b| b.end_level < 25)
+            .unwrap_or(false);
+
+        let phys_concern = self.physiological
+            .as_ref()
+            .map(|p| p.has_health_concerns())
+            .unwrap_or(false);
+
+        hrv_concern || sleep_concern || battery_concern || phys_concern
+    }
+
+    /// Get the primary recovery limiting factor
+    pub fn limiting_factor(&self) -> Option<String> {
+        let mut factors = Vec::new();
+
+        if let Some(hrv) = &self.hrv_metrics {
+            if let Some(HrvStatus::Poor) = hrv.status {
+                factors.push(("HRV", 10));
+            } else if let Some(HrvStatus::Unbalanced) = hrv.status {
+                factors.push(("HRV", 5));
+            }
+        }
+
+        if let Some(sleep) = &self.sleep_data {
+            if let Some(score) = sleep.sleep_score {
+                if score < 50 {
+                    factors.push(("Sleep", 10));
+                } else if score < 70 {
+                    factors.push(("Sleep", 5));
+                }
+            }
+        }
+
+        if let Some(battery) = &self.body_battery {
+            if battery.end_level < 25 {
+                factors.push(("Energy", 10));
+            } else if battery.end_level < 50 {
+                factors.push(("Energy", 5));
+            }
+        }
+
+        if let Some(phys) = &self.physiological {
+            if phys.has_health_concerns() {
+                factors.push(("Health", 10));
+            }
+        }
+
+        // Return highest priority factor
+        factors.sort_by_key(|(_, priority)| -priority);
+        factors.first().map(|(name, _)| name.to_string())
+    }
+}
+
+/// Recovery quality assessment categories
+///
+/// # Interpretation
+///
+/// - **Excellent**: Full recovery, ready for peak performance training
+/// - **Good**: Well recovered, normal training load appropriate
+/// - **Fair**: Partial recovery, consider reduced training load
+/// - **Poor**: Inadequate recovery, prioritize rest and recovery
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RecoveryQuality {
+    /// Excellent recovery (90-100)
+    Excellent,
+    /// Good recovery (70-89)
+    Good,
+    /// Fair recovery (50-69)
+    Fair,
+    /// Poor recovery (<50)
+    Poor,
+}
+
+impl RecoveryQuality {
+    /// Determine recovery quality from readiness score
+    pub fn from_readiness(readiness: u8) -> Self {
+        match readiness {
+            90..=100 => RecoveryQuality::Excellent,
+            70..=89 => RecoveryQuality::Good,
+            50..=69 => RecoveryQuality::Fair,
+            _ => RecoveryQuality::Poor,
+        }
+    }
+}
+
+impl fmt::Display for RecoveryQuality {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RecoveryQuality::Excellent => write!(f, "Excellent"),
+            RecoveryQuality::Good => write!(f, "Good"),
+            RecoveryQuality::Fair => write!(f, "Fair"),
+            RecoveryQuality::Poor => write!(f, "Poor"),
+        }
+    }
+}
+
+/// Multi-day recovery trend analysis
+pub struct RecoveryTrend {
+    metrics: Vec<RecoveryMetrics>,
+}
+
+impl RecoveryTrend {
+    /// Create new trend analysis from metrics
+    pub fn new(metrics: Vec<RecoveryMetrics>) -> Self {
+        RecoveryTrend { metrics }
+    }
+
+    /// Calculate average training readiness over period
+    pub fn average_readiness(&self) -> Option<f64> {
+        let readiness_scores: Vec<u8> = self.metrics
+            .iter()
+            .filter_map(|m| m.training_readiness)
+            .collect();
+
+        if readiness_scores.is_empty() {
+            None
+        } else {
+            let sum: u32 = readiness_scores.iter().map(|&s| s as u32).sum();
+            Some(sum as f64 / readiness_scores.len() as f64)
+        }
+    }
+
+    /// Detect if recovery is trending upward or downward
+    pub fn trend_direction(&self) -> Option<TrendDirection> {
+        if self.metrics.len() < 3 {
+            return None;
+        }
+
+        let readiness_scores: Vec<u8> = self.metrics
+            .iter()
+            .filter_map(|m| m.training_readiness)
+            .collect();
+
+        if readiness_scores.len() < 3 {
+            return None;
+        }
+
+        // Simple linear trend: compare first half to second half
+        let mid = readiness_scores.len() / 2;
+        let first_half: f64 = readiness_scores[..mid].iter().map(|&s| s as f64).sum::<f64>() / mid as f64;
+        let second_half: f64 = readiness_scores[mid..].iter().map(|&s| s as f64).sum::<f64>() / (readiness_scores.len() - mid) as f64;
+
+        let diff = second_half - first_half;
+
+        if diff > 5.0 {
+            Some(TrendDirection::Improving)
+        } else if diff < -5.0 {
+            Some(TrendDirection::Declining)
+        } else {
+            Some(TrendDirection::Stable)
+        }
+    }
+
+    /// Check if athlete is showing signs of overtraining
+    pub fn overtraining_risk(&self) -> bool {
+        // Check for sustained low readiness
+        let recent_readiness: Vec<u8> = self.metrics
+            .iter()
+            .rev()
+            .take(5)
+            .filter_map(|m| m.training_readiness)
+            .collect();
+
+        if recent_readiness.len() < 3 {
+            return false;
+        }
+
+        // Risk if 3+ days of low readiness
+        recent_readiness.iter().filter(|&&r| r < 60).count() >= 3
+    }
+}
+
+/// Recovery trend direction
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrendDirection {
+    /// Recovery improving over time
+    Improving,
+    /// Recovery stable
+    Stable,
+    /// Recovery declining over time
+    Declining,
+}
+
+impl fmt::Display for TrendDirection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TrendDirection::Improving => write!(f, "Improving"),
+            TrendDirection::Stable => write!(f, "Stable"),
+            TrendDirection::Declining => write!(f, "Declining"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2054,5 +2405,426 @@ mod tests {
         assert_eq!(metrics.pulse_ox, deserialized.pulse_ox);
         assert_eq!(metrics.stress_score, deserialized.stress_score);
         assert_eq!(metrics.recovery_time, deserialized.recovery_time);
+    }
+
+    // Unified Recovery Metrics tests
+    #[test]
+    fn test_recovery_metrics_creation() {
+        use chrono::NaiveDate;
+
+        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let metrics = RecoveryMetrics::new(date);
+
+        assert_eq!(metrics.date, date);
+        assert!(metrics.hrv_metrics.is_none());
+        assert!(metrics.sleep_data.is_none());
+        assert!(metrics.body_battery.is_none());
+        assert!(metrics.physiological.is_none());
+        assert!(metrics.training_readiness.is_none());
+        assert!(metrics.recovery_quality.is_none());
+    }
+
+    #[test]
+    fn test_readiness_calculation_full_data() {
+        use chrono::NaiveDate;
+
+        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let now = Utc::now();
+
+        let mut metrics = RecoveryMetrics::new(date);
+
+        // Excellent HRV
+        metrics.hrv_metrics = Some(HrvMetrics {
+            rmssd: Some(60.0),
+            status: Some(HrvStatus::Balanced),
+            baseline: Some(55.0),
+            score: Some(100),
+            measurement_time: Some(now),
+            measurement_context: None,
+        });
+
+        // Good sleep
+        metrics.sleep_data = Some(SleepMetrics {
+            total_sleep: 450,
+            deep_sleep: 90,
+            light_sleep: 240,
+            rem_sleep: 120,
+            awake_time: 30,
+            sleep_score: Some(85),
+            sleep_efficiency: Some(93.75),
+            sleep_onset: Some(10),
+            interruptions: Some(2),
+        });
+
+        // High energy
+        metrics.body_battery = Some(BodyBatteryData::new(90, 90, None, now).unwrap());
+
+        // Low stress
+        metrics.physiological = Some(PhysiologicalMetrics::new(
+            Some(55),
+            Some(14.0),
+            Some(98),
+            Some(20),
+            Some(6),
+            now,
+        ).unwrap());
+
+        metrics.calculate_readiness();
+
+        // Expected: HRV(100*0.3) + Sleep(85*0.25) + Battery(90*0.25) + Stress((100-20)*0.2)
+        // = 30 + 21.25 + 22.5 + 16 = 89.75 ≈ 89-90
+        assert!(metrics.training_readiness.is_some());
+        let readiness = metrics.training_readiness.unwrap();
+        assert!(readiness >= 88 && readiness <= 91, "Readiness {} should be 88-91", readiness);
+        assert_eq!(metrics.recovery_quality, Some(RecoveryQuality::Good));
+    }
+
+    #[test]
+    fn test_readiness_calculation_partial_data() {
+        use chrono::NaiveDate;
+
+        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let now = Utc::now();
+
+        let mut metrics = RecoveryMetrics::new(date);
+
+        // Only HRV and sleep data
+        metrics.hrv_metrics = Some(HrvMetrics {
+            rmssd: Some(40.0),
+            status: Some(HrvStatus::Unbalanced),
+            baseline: Some(50.0),
+            score: Some(65),
+            measurement_time: Some(now),
+            measurement_context: None,
+        });
+
+        metrics.sleep_data = Some(SleepMetrics {
+            total_sleep: 360,
+            deep_sleep: 50,
+            light_sleep: 200,
+            rem_sleep: 110,
+            awake_time: 40,
+            sleep_score: Some(70),
+            sleep_efficiency: Some(85.0),
+            sleep_onset: Some(20),
+            interruptions: Some(4),
+        });
+
+        metrics.calculate_readiness();
+
+        // Expected: HRV(65*0.3) + Sleep(70*0.25) scaled to full weight
+        // = (19.5 + 17.5) / 0.55 ≈ 67
+        assert!(metrics.training_readiness.is_some());
+        let readiness = metrics.training_readiness.unwrap();
+        assert!(readiness >= 65 && readiness <= 69, "Readiness {} should be 65-69", readiness);
+        assert_eq!(metrics.recovery_quality, Some(RecoveryQuality::Fair));
+    }
+
+    #[test]
+    fn test_readiness_poor_recovery() {
+        use chrono::NaiveDate;
+
+        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let now = Utc::now();
+
+        let mut metrics = RecoveryMetrics::new(date);
+
+        // Poor HRV
+        metrics.hrv_metrics = Some(HrvMetrics {
+            rmssd: Some(25.0),
+            status: Some(HrvStatus::Poor),
+            baseline: Some(50.0),
+            score: Some(30),
+            measurement_time: Some(now),
+            measurement_context: None,
+        });
+
+        // Poor sleep
+        metrics.sleep_data = Some(SleepMetrics {
+            total_sleep: 300,
+            deep_sleep: 30,
+            light_sleep: 180,
+            rem_sleep: 90,
+            awake_time: 60,
+            sleep_score: Some(45),
+            sleep_efficiency: Some(75.0),
+            sleep_onset: Some(30),
+            interruptions: Some(8),
+        });
+
+        // Low energy
+        metrics.body_battery = Some(BodyBatteryData::new(20, 20, None, now).unwrap());
+
+        metrics.calculate_readiness();
+
+        // Expected: Poor across all metrics
+        assert!(metrics.training_readiness.is_some());
+        let readiness = metrics.training_readiness.unwrap();
+        assert!(readiness < 50, "Poor recovery readiness {} should be < 50", readiness);
+        assert_eq!(metrics.recovery_quality, Some(RecoveryQuality::Poor));
+    }
+
+    #[test]
+    fn test_is_ready_for_hard_training() {
+        use chrono::NaiveDate;
+
+        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let mut metrics = RecoveryMetrics::new(date);
+
+        // No readiness calculated
+        assert!(!metrics.is_ready_for_hard_training());
+
+        // Good readiness
+        metrics.training_readiness = Some(80);
+        assert!(metrics.is_ready_for_hard_training());
+
+        // Border case
+        metrics.training_readiness = Some(75);
+        assert!(metrics.is_ready_for_hard_training());
+
+        // Not ready
+        metrics.training_readiness = Some(74);
+        assert!(!metrics.is_ready_for_hard_training());
+    }
+
+    #[test]
+    fn test_recovery_concerns() {
+        use chrono::NaiveDate;
+
+        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let now = Utc::now();
+
+        let mut metrics = RecoveryMetrics::new(date);
+
+        // No concerns initially
+        assert!(!metrics.has_recovery_concerns());
+
+        // Add poor HRV
+        metrics.hrv_metrics = Some(HrvMetrics {
+            rmssd: Some(25.0),
+            status: Some(HrvStatus::Poor),
+            baseline: Some(50.0),
+            score: Some(30),
+            measurement_time: Some(now),
+            measurement_context: None,
+        });
+        assert!(metrics.has_recovery_concerns());
+
+        // Reset and try with poor sleep
+        metrics = RecoveryMetrics::new(date);
+        metrics.sleep_data = Some(SleepMetrics {
+            total_sleep: 300,
+            deep_sleep: 30,
+            light_sleep: 180,
+            rem_sleep: 90,
+            awake_time: 60,
+            sleep_score: Some(40),
+            sleep_efficiency: Some(75.0),
+            sleep_onset: None,
+            interruptions: None,
+        });
+        assert!(metrics.has_recovery_concerns());
+    }
+
+    #[test]
+    fn test_limiting_factor() {
+        use chrono::NaiveDate;
+
+        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let now = Utc::now();
+
+        let mut metrics = RecoveryMetrics::new(date);
+
+        // No limiting factor
+        assert!(metrics.limiting_factor().is_none());
+
+        // Poor HRV is limiting
+        metrics.hrv_metrics = Some(HrvMetrics {
+            rmssd: Some(25.0),
+            status: Some(HrvStatus::Poor),
+            baseline: Some(50.0),
+            score: Some(30),
+            measurement_time: Some(now),
+            measurement_context: None,
+        });
+        assert_eq!(metrics.limiting_factor(), Some("HRV".to_string()));
+
+        // Poor sleep overrides if both present
+        metrics.sleep_data = Some(SleepMetrics {
+            total_sleep: 300,
+            deep_sleep: 30,
+            light_sleep: 180,
+            rem_sleep: 90,
+            awake_time: 60,
+            sleep_score: Some(40),
+            sleep_efficiency: Some(75.0),
+            sleep_onset: None,
+            interruptions: None,
+        });
+        // Both HRV and Sleep are priority 10, should return first one (HRV)
+        assert_eq!(metrics.limiting_factor(), Some("HRV".to_string()));
+    }
+
+    #[test]
+    fn test_recovery_quality_display() {
+        assert_eq!(RecoveryQuality::Excellent.to_string(), "Excellent");
+        assert_eq!(RecoveryQuality::Good.to_string(), "Good");
+        assert_eq!(RecoveryQuality::Fair.to_string(), "Fair");
+        assert_eq!(RecoveryQuality::Poor.to_string(), "Poor");
+    }
+
+    #[test]
+    fn test_recovery_quality_from_readiness() {
+        assert_eq!(RecoveryQuality::from_readiness(95), RecoveryQuality::Excellent);
+        assert_eq!(RecoveryQuality::from_readiness(90), RecoveryQuality::Excellent);
+        assert_eq!(RecoveryQuality::from_readiness(89), RecoveryQuality::Good);
+        assert_eq!(RecoveryQuality::from_readiness(70), RecoveryQuality::Good);
+        assert_eq!(RecoveryQuality::from_readiness(69), RecoveryQuality::Fair);
+        assert_eq!(RecoveryQuality::from_readiness(50), RecoveryQuality::Fair);
+        assert_eq!(RecoveryQuality::from_readiness(49), RecoveryQuality::Poor);
+        assert_eq!(RecoveryQuality::from_readiness(0), RecoveryQuality::Poor);
+    }
+
+    #[test]
+    fn test_recovery_trend_average() {
+        use chrono::NaiveDate;
+
+        let mut metrics_vec = Vec::new();
+
+        for i in 0..5 {
+            let date = NaiveDate::from_ymd_opt(2024, 1, 10 + i).unwrap();
+            let mut metrics = RecoveryMetrics::new(date);
+            metrics.training_readiness = Some(70 + i as u8 * 5); // 70, 75, 80, 85, 90
+            metrics_vec.push(metrics);
+        }
+
+        let trend = RecoveryTrend::new(metrics_vec);
+        let avg = trend.average_readiness().unwrap();
+
+        // Average of 70, 75, 80, 85, 90 = 80
+        assert!((avg - 80.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_recovery_trend_improving() {
+        use chrono::NaiveDate;
+
+        let mut metrics_vec = Vec::new();
+
+        // Improving trend: 50, 55, 60, 75, 85
+        let scores = vec![50, 55, 60, 75, 85];
+        for (i, score) in scores.iter().enumerate() {
+            let date = NaiveDate::from_ymd_opt(2024, 1, 10 + i as u32).unwrap();
+            let mut metrics = RecoveryMetrics::new(date);
+            metrics.training_readiness = Some(*score);
+            metrics_vec.push(metrics);
+        }
+
+        let trend = RecoveryTrend::new(metrics_vec);
+        assert_eq!(trend.trend_direction(), Some(TrendDirection::Improving));
+    }
+
+    #[test]
+    fn test_recovery_trend_declining() {
+        use chrono::NaiveDate;
+
+        let mut metrics_vec = Vec::new();
+
+        // Declining trend: 85, 80, 75, 60, 50
+        let scores = vec![85, 80, 75, 60, 50];
+        for (i, score) in scores.iter().enumerate() {
+            let date = NaiveDate::from_ymd_opt(2024, 1, 10 + i as u32).unwrap();
+            let mut metrics = RecoveryMetrics::new(date);
+            metrics.training_readiness = Some(*score);
+            metrics_vec.push(metrics);
+        }
+
+        let trend = RecoveryTrend::new(metrics_vec);
+        assert_eq!(trend.trend_direction(), Some(TrendDirection::Declining));
+    }
+
+    #[test]
+    fn test_recovery_trend_stable() {
+        use chrono::NaiveDate;
+
+        let mut metrics_vec = Vec::new();
+
+        // Stable trend: 75, 78, 74, 77, 76
+        let scores = vec![75, 78, 74, 77, 76];
+        for (i, score) in scores.iter().enumerate() {
+            let date = NaiveDate::from_ymd_opt(2024, 1, 10 + i as u32).unwrap();
+            let mut metrics = RecoveryMetrics::new(date);
+            metrics.training_readiness = Some(*score);
+            metrics_vec.push(metrics);
+        }
+
+        let trend = RecoveryTrend::new(metrics_vec);
+        assert_eq!(trend.trend_direction(), Some(TrendDirection::Stable));
+    }
+
+    #[test]
+    fn test_overtraining_risk_detection() {
+        use chrono::NaiveDate;
+
+        let mut metrics_vec = Vec::new();
+
+        // 5 days with low readiness (< 60)
+        for i in 0..5 {
+            let date = NaiveDate::from_ymd_opt(2024, 1, 10 + i).unwrap();
+            let mut metrics = RecoveryMetrics::new(date);
+            metrics.training_readiness = Some(55);
+            metrics_vec.push(metrics);
+        }
+
+        let trend = RecoveryTrend::new(metrics_vec);
+        assert!(trend.overtraining_risk());
+
+        // Now test with mixed scores (not overtraining)
+        let mut metrics_vec = Vec::new();
+        let scores = vec![80, 75, 85, 78, 82];
+        for (i, score) in scores.iter().enumerate() {
+            let date = NaiveDate::from_ymd_opt(2024, 1, 10 + i as u32).unwrap();
+            let mut metrics = RecoveryMetrics::new(date);
+            metrics.training_readiness = Some(*score);
+            metrics_vec.push(metrics);
+        }
+
+        let trend = RecoveryTrend::new(metrics_vec);
+        assert!(!trend.overtraining_risk());
+    }
+
+    #[test]
+    fn test_trend_direction_display() {
+        assert_eq!(TrendDirection::Improving.to_string(), "Improving");
+        assert_eq!(TrendDirection::Stable.to_string(), "Stable");
+        assert_eq!(TrendDirection::Declining.to_string(), "Declining");
+    }
+
+    #[test]
+    fn test_recovery_metrics_serialization() {
+        use chrono::NaiveDate;
+
+        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let now = Utc::now();
+
+        let mut metrics = RecoveryMetrics::new(date);
+        metrics.hrv_metrics = Some(HrvMetrics {
+            rmssd: Some(55.0),
+            status: Some(HrvStatus::Balanced),
+            baseline: Some(50.0),
+            score: Some(95),
+            measurement_time: Some(now),
+            measurement_context: None,
+        });
+        metrics.training_readiness = Some(85);
+        metrics.recovery_quality = Some(RecoveryQuality::Good);
+
+        // Test JSON serialization
+        let json = serde_json::to_string(&metrics).unwrap();
+        let deserialized: RecoveryMetrics = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(metrics.date, deserialized.date);
+        assert_eq!(metrics.training_readiness, deserialized.training_readiness);
+        assert_eq!(metrics.recovery_quality, deserialized.recovery_quality);
     }
 }
