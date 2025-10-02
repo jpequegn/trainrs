@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::import::{developer_registry::DeveloperFieldRegistry, validation::WorkoutValidator, ImportFormat};
 use crate::models::{DataPoint, DataSource, Sport, Workout, WorkoutSummary, WorkoutType};
 use crate::power::PowerAnalyzer;
+use crate::recovery::{BodyBatteryData, HrvMeasurement, PhysiologicalMetrics, SleepSession, SleepStage, SleepStageSegment};
 use std::sync::Arc;
 
 /// FIT file importer for Garmin native format.
@@ -213,7 +214,7 @@ impl FitImporter {
     ///     println!("RMSSD: {} ms", measurement.rmssd);
     /// }
     /// ```
-    pub fn parse_hrv_data(&self, file_path: &Path) -> Result<Vec<crate::recovery::HrvMeasurement>> {
+    pub fn parse_hrv_data(&self, file_path: &Path) -> Result<Vec<HrvMeasurement>> {
 
         // Parse the FIT file
         let mut file = File::open(file_path)
@@ -257,8 +258,7 @@ impl FitImporter {
     }
 
     /// Parse HRV data from MonitoringInfo message
-    fn parse_monitoring_info_hrv(&self, record: &FitDataRecord) -> Option<crate::recovery::HrvMeasurement> {
-        use crate::recovery::HrvMeasurement;
+    fn parse_monitoring_info_hrv(&self, record: &FitDataRecord) -> Option<HrvMeasurement> {
 
         let mut rmssd: Option<f64> = None;
         let mut timestamp: Option<DateTime<Utc>> = None;
@@ -320,7 +320,7 @@ impl FitImporter {
     fn parse_stress_level_hrv(
         &self,
         record: &FitDataRecord,
-        measurements: &mut Vec<crate::recovery::HrvMeasurement>,
+        measurements: &mut Vec<HrvMeasurement>,
     ) -> Option<()> {
         let mut stress_level: Option<u8> = None;
         let mut stress_timestamp: Option<DateTime<Utc>> = None;
@@ -386,8 +386,7 @@ impl FitImporter {
     ///     println!("Total sleep: {} minutes", session.metrics.total_sleep);
     /// }
     /// ```
-    pub fn parse_sleep_data(&self, file_path: &Path) -> Result<Vec<crate::recovery::SleepSession>> {
-        use crate::recovery::{SleepSession, SleepStageSegment};
+    pub fn parse_sleep_data(&self, file_path: &Path) -> Result<Vec<SleepSession>> {
 
         // Parse the FIT file
         let mut file = File::open(file_path)
@@ -457,8 +456,7 @@ impl FitImporter {
     }
 
     /// Parse sleep stage segment from SleepLevel message
-    fn parse_sleep_level(&self, record: &FitDataRecord) -> Option<crate::recovery::SleepStageSegment> {
-        use crate::recovery::{SleepStage, SleepStageSegment};
+    fn parse_sleep_level(&self, record: &FitDataRecord) -> Option<SleepStageSegment> {
 
         let mut sleep_level: Option<u8> = None;
         let mut timestamp: Option<DateTime<Utc>> = None;
@@ -551,6 +549,338 @@ impl FitImporter {
         } else {
             None
         }
+    }
+
+    /// Parse Body Battery data from FIT file monitoring messages
+    ///
+    /// Extracts Body Battery levels and charge/drain rates from BodyBatteryEvent
+    /// messages in FIT files. Body Battery is Garmin's energy tracking metric (0-100).
+    ///
+    /// # Arguments
+    ///
+    /// * `file_path` - Path to the FIT file containing Body Battery data
+    ///
+    /// # Returns
+    ///
+    /// Vector of BodyBatteryData records found in the file
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use trainrs::import::fit::FitImporter;
+    /// let importer = FitImporter::new();
+    /// let body_battery = importer.parse_body_battery("monitoring.fit")?;
+    /// for data in body_battery {
+    ///     println!("Battery level: {}", data.end_level);
+    /// }
+    /// ```
+    pub fn parse_body_battery(&self, file_path: &Path) -> Result<Vec<BodyBatteryData>> {
+
+        // Parse the FIT file
+        let mut file = File::open(file_path)
+            .with_context(|| format!("Failed to open FIT file: {}", file_path.display()))?;
+
+        let records: Vec<FitDataRecord> = fitparser::from_reader(&mut file)
+            .map_err(|e| anyhow::anyhow!("Failed to parse FIT file records: {:?}", e))?;
+
+        if records.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut body_battery_data = Vec::new();
+
+        // Parse BodyBatteryEvent messages (message number 370)
+        for record in &records {
+            if record.kind().as_u16() == 370 {
+                if let Some(data) = self.parse_body_battery_event(record) {
+                    body_battery_data.push(data);
+                }
+            }
+        }
+
+        Ok(body_battery_data)
+    }
+
+    /// Parse Body Battery event from BodyBatteryEvent message
+    fn parse_body_battery_event(&self, record: &FitDataRecord) -> Option<BodyBatteryData> {
+
+        let mut battery_level: Option<u8> = None;
+        let mut timestamp: Option<DateTime<Utc>> = None;
+
+        for field in record.fields() {
+            match field.name() {
+                "battery_level" => {
+                    if let Value::UInt8(val) = field.value() {
+                        battery_level = Some(*val);
+                    } else if let Value::UInt16(val) = field.value() {
+                        battery_level = Some((*val).min(100) as u8);
+                    }
+                }
+                "event_timestamp" | "timestamp" => {
+                    if let Value::Timestamp(ts) = field.value() {
+                        timestamp = Some((*ts).into());
+                    }
+                }
+                "local_timestamp" => {
+                    if timestamp.is_none() {
+                        if let Value::Timestamp(ts) = field.value() {
+                            timestamp = Some((*ts).into());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Create Body Battery data if we have valid level and timestamp
+        if let (Some(level), Some(ts)) = (battery_level, timestamp) {
+            // For single events, we use the same level for start and end
+            // Drain/charge rates would be calculated across multiple events
+            if let Ok(data) = BodyBatteryData::new(level, level, None, ts) {
+                return Some(data);
+            }
+        }
+
+        None
+    }
+
+    /// Parse physiological monitoring data from FIT file
+    ///
+    /// Extracts resting heart rate, respiration rate, stress scores, and recovery time
+    /// from MonitoringInfo, RespirationRate, and Monitoring messages.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_path` - Path to the FIT file containing physiological data
+    ///
+    /// # Returns
+    ///
+    /// Vector of PhysiologicalMetrics records found in the file
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use trainrs::import::fit::FitImporter;
+    /// let importer = FitImporter::new();
+    /// let physio_data = importer.parse_physiological_data("monitoring.fit")?;
+    /// for metrics in physio_data {
+    ///     if let Some(rhr) = metrics.resting_hr {
+    ///         println!("Resting HR: {} bpm", rhr);
+    ///     }
+    /// }
+    /// ```
+    pub fn parse_physiological_data(&self, file_path: &Path) -> Result<Vec<PhysiologicalMetrics>> {
+
+        // Parse the FIT file
+        let mut file = File::open(file_path)
+            .with_context(|| format!("Failed to open FIT file: {}", file_path.display()))?;
+
+        let records: Vec<FitDataRecord> = fitparser::from_reader(&mut file)
+            .map_err(|e| anyhow::anyhow!("Failed to parse FIT file records: {:?}", e))?;
+
+        if records.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut physio_metrics = Vec::new();
+
+        // Parse MonitoringInfo messages for resting heart rate (message number 103)
+        for record in &records {
+            if record.kind() == fitparser::profile::MesgNum::MonitoringInfo {
+                if let Some(metrics) = self.parse_monitoring_info_physio(record) {
+                    physio_metrics.push(metrics);
+                }
+            }
+        }
+
+        // Parse RespirationRate messages (message number 297)
+        for record in &records {
+            if record.kind().as_u16() == 297 {
+                if let Some(metrics) = self.parse_respiration_rate(record) {
+                    // Try to merge with existing metric at similar timestamp
+                    if let Some(existing) = physio_metrics.iter_mut().find(|m| {
+                        (m.timestamp - metrics.timestamp).num_seconds().abs() < 60
+                    }) {
+                        if metrics.respiration_rate.is_some() {
+                            existing.respiration_rate = metrics.respiration_rate;
+                        }
+                    } else {
+                        physio_metrics.push(metrics);
+                    }
+                }
+            }
+        }
+
+        // Enhance with stress data from StressLevel messages (already parsed above)
+        for record in &records {
+            if record.kind().as_u16() == 227 {
+                if let Some(metrics) = self.parse_stress_physio(record) {
+                    // Try to merge with existing metric at similar timestamp
+                    if let Some(existing) = physio_metrics.iter_mut().find(|m| {
+                        (m.timestamp - metrics.timestamp).num_seconds().abs() < 300
+                    }) {
+                        if metrics.stress_score.is_some() {
+                            existing.stress_score = metrics.stress_score;
+                        }
+                    } else {
+                        physio_metrics.push(metrics);
+                    }
+                }
+            }
+        }
+
+        Ok(physio_metrics)
+    }
+
+    /// Parse physiological data from MonitoringInfo message
+    fn parse_monitoring_info_physio(&self, record: &FitDataRecord) -> Option<PhysiologicalMetrics> {
+
+        let mut resting_hr: Option<u8> = None;
+        let mut timestamp: Option<DateTime<Utc>> = None;
+        let mut recovery_time: Option<u16> = None;
+
+        for field in record.fields() {
+            match field.name() {
+                "resting_heart_rate" => {
+                    if let Value::UInt8(hr) = field.value() {
+                        resting_hr = Some(*hr);
+                    } else if let Value::UInt16(hr) = field.value() {
+                        resting_hr = Some((*hr).min(255) as u8);
+                    }
+                }
+                "timestamp" => {
+                    if let Value::Timestamp(ts) = field.value() {
+                        timestamp = Some((*ts).into());
+                    }
+                }
+                "local_timestamp" => {
+                    if timestamp.is_none() {
+                        if let Value::Timestamp(ts) = field.value() {
+                            timestamp = Some((*ts).into());
+                        }
+                    }
+                }
+                "recovery_time" => {
+                    if let Value::UInt16(rt) = field.value() {
+                        recovery_time = Some(*rt);
+                    } else if let Value::UInt32(rt) = field.value() {
+                        recovery_time = Some((*rt).min(u16::MAX as u32) as u16);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Create metrics if we have at least timestamp and one metric
+        if let Some(ts) = timestamp {
+            if resting_hr.is_some() || recovery_time.is_some() {
+                if let Ok(metrics) = PhysiologicalMetrics::new(
+                    resting_hr,
+                    None, // respiration_rate
+                    None, // pulse_ox
+                    None, // stress_score
+                    recovery_time,
+                    ts,
+                ) {
+                    return Some(metrics);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Parse respiration rate from RespirationRate message
+    fn parse_respiration_rate(&self, record: &FitDataRecord) -> Option<PhysiologicalMetrics> {
+
+        let mut respiration_rate: Option<f64> = None;
+        let mut timestamp: Option<DateTime<Utc>> = None;
+
+        for field in record.fields() {
+            match field.name() {
+                "respiration_rate" => {
+                    if let Value::Float32(rate) = field.value() {
+                        respiration_rate = Some(*rate as f64);
+                    } else if let Value::Float64(rate) = field.value() {
+                        respiration_rate = Some(*rate);
+                    } else if let Value::UInt8(rate) = field.value() {
+                        respiration_rate = Some(*rate as f64);
+                    }
+                }
+                "timestamp" => {
+                    if let Value::Timestamp(ts) = field.value() {
+                        timestamp = Some((*ts).into());
+                    }
+                }
+                "local_timestamp" => {
+                    if timestamp.is_none() {
+                        if let Value::Timestamp(ts) = field.value() {
+                            timestamp = Some((*ts).into());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Create metrics if we have valid data
+        if let (Some(rate), Some(ts)) = (respiration_rate, timestamp) {
+            if let Ok(metrics) = PhysiologicalMetrics::new(
+                None, // resting_hr
+                Some(rate),
+                None, // pulse_ox
+                None, // stress_score
+                None, // recovery_time
+                ts,
+            ) {
+                return Some(metrics);
+            }
+        }
+
+        None
+    }
+
+    /// Parse stress score from StressLevel message
+    fn parse_stress_physio(&self, record: &FitDataRecord) -> Option<PhysiologicalMetrics> {
+
+        let mut stress_score: Option<u8> = None;
+        let mut timestamp: Option<DateTime<Utc>> = None;
+
+        for field in record.fields() {
+            match field.name() {
+                "stress_level_value" => {
+                    if let Value::UInt8(stress) = field.value() {
+                        stress_score = Some(*stress);
+                    } else if let Value::SInt16(stress) = field.value() {
+                        stress_score = Some((*stress).clamp(0, 100) as u8);
+                    } else if let Value::UInt16(stress) = field.value() {
+                        stress_score = Some((*stress).min(100) as u8);
+                    }
+                }
+                "stress_level_time" | "timestamp" => {
+                    if let Value::Timestamp(ts) = field.value() {
+                        timestamp = Some((*ts).into());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Create metrics if we have valid data
+        if let (Some(stress), Some(ts)) = (stress_score, timestamp) {
+            if let Ok(metrics) = PhysiologicalMetrics::new(
+                None, // resting_hr
+                None, // respiration_rate
+                None, // pulse_ox
+                Some(stress),
+                None, // recovery_time
+                ts,
+            ) {
+                return Some(metrics);
+            }
+        }
+
+        None
     }
 
     /// Parse session information from FIT file
