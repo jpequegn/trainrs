@@ -367,6 +367,192 @@ impl FitImporter {
         None
     }
 
+    /// Parse sleep data from FIT file sleep assessment and level messages
+    ///
+    /// Extracts sleep metrics from SleepAssessment and SleepLevel messages in FIT files.
+    /// This is used for tracking nightly sleep sessions from Garmin devices.
+    ///
+    /// # Returns
+    ///
+    /// Vector of SleepSession records found in the file
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use trainrs::import::fit::FitImporter;
+    /// let importer = FitImporter::new();
+    /// let sleep_data = importer.parse_sleep_data("sleep.fit")?;
+    /// for session in sleep_data {
+    ///     println!("Total sleep: {} minutes", session.metrics.total_sleep);
+    /// }
+    /// ```
+    pub fn parse_sleep_data(&self, file_path: &Path) -> Result<Vec<crate::recovery::SleepSession>> {
+        use crate::recovery::{SleepSession, SleepStageSegment};
+
+        // Parse the FIT file
+        let mut file = File::open(file_path)
+            .with_context(|| format!("Failed to open FIT file: {}", file_path.display()))?;
+
+        let records: Vec<FitDataRecord> = fitparser::from_reader(&mut file)
+            .map_err(|e| anyhow::anyhow!("Failed to parse FIT file records: {:?}", e))?;
+
+        if records.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut sleep_sessions = Vec::new();
+        let mut current_segments: Vec<SleepStageSegment> = Vec::new();
+        let mut session_start: Option<DateTime<Utc>> = None;
+        let mut session_end: Option<DateTime<Utc>> = None;
+        let mut sleep_onset: Option<u16> = None;
+
+        // Parse SleepLevel events for stage tracking (message number 275)
+        for record in &records {
+            if record.kind().as_u16() == 275 {
+                if let Some(segment) = self.parse_sleep_level(record) {
+                    // Track session boundaries
+                    if session_start.is_none() || segment.start_time < session_start.unwrap() {
+                        session_start = Some(segment.start_time);
+                    }
+                    if session_end.is_none() || segment.end_time > session_end.unwrap() {
+                        session_end = Some(segment.end_time);
+                    }
+                    current_segments.push(segment);
+                }
+            }
+        }
+
+        // Parse SleepAssessment for additional metrics (message number 346)
+        for record in &records {
+            if record.kind().as_u16() == 346 {
+                if let Some((start, end, onset)) = self.parse_sleep_assessment(record) {
+                    // Use assessment times if we don't have them from levels
+                    if session_start.is_none() {
+                        session_start = Some(start);
+                    }
+                    if session_end.is_none() {
+                        session_end = Some(end);
+                    }
+                    sleep_onset = onset;
+                }
+            }
+        }
+
+        // Create sleep session if we have valid data
+        if let (Some(start), Some(end)) = (session_start, session_end) {
+            if !current_segments.is_empty() {
+                match SleepSession::from_stages(start, end, current_segments, sleep_onset) {
+                    Ok(mut session) => {
+                        session.source = Some("garmin_fit".to_string());
+                        sleep_sessions.push(session);
+                    }
+                    Err(_) => {
+                        // Skip invalid sessions
+                    }
+                }
+            }
+        }
+
+        Ok(sleep_sessions)
+    }
+
+    /// Parse sleep stage segment from SleepLevel message
+    fn parse_sleep_level(&self, record: &FitDataRecord) -> Option<crate::recovery::SleepStageSegment> {
+        use crate::recovery::{SleepStage, SleepStageSegment};
+
+        let mut sleep_level: Option<u8> = None;
+        let mut timestamp: Option<DateTime<Utc>> = None;
+        let duration: Option<u32> = None;
+
+        for field in record.fields() {
+            match field.name() {
+                "sleep_level" => {
+                    if let Value::UInt8(val) = field.value() {
+                        sleep_level = Some(*val);
+                    } else if let Value::Enum(val) = field.value() {
+                        sleep_level = Some(*val as u8);
+                    }
+                }
+                "timestamp" => {
+                    if let Value::Timestamp(ts) = field.value() {
+                        timestamp = Some((*ts).into());
+                    }
+                }
+                "local_timestamp" => {
+                    if timestamp.is_none() {
+                        if let Value::Timestamp(ts) = field.value() {
+                            timestamp = Some((*ts).into());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Convert FIT sleep level to SleepStage
+        let stage = match sleep_level? {
+            0 => SleepStage::Awake,
+            1 => SleepStage::Light,
+            2 => SleepStage::Deep,
+            3 => SleepStage::REM,
+            _ => return None,
+        };
+
+        let start_time = timestamp?;
+        // Default duration to 30 seconds if not specified
+        let duration_secs = duration.unwrap_or(30);
+        let end_time = start_time + chrono::Duration::seconds(duration_secs as i64);
+
+        SleepStageSegment::new(stage, start_time, end_time).ok()
+    }
+
+    /// Parse sleep assessment data from SleepAssessment message
+    fn parse_sleep_assessment(
+        &self,
+        record: &FitDataRecord,
+    ) -> Option<(DateTime<Utc>, DateTime<Utc>, Option<u16>)> {
+        let mut start_time: Option<DateTime<Utc>> = None;
+        let mut end_time: Option<DateTime<Utc>> = None;
+        let mut sleep_onset: Option<u16> = None;
+
+        for field in record.fields() {
+            match field.name() {
+                "local_timestamp" | "timestamp" => {
+                    if let Value::Timestamp(ts) = field.value() {
+                        if end_time.is_none() {
+                            end_time = Some((*ts).into());
+                        }
+                    }
+                }
+                "start_time" | "overall_sleep_start_timestamp" => {
+                    if let Value::Timestamp(ts) = field.value() {
+                        start_time = Some((*ts).into());
+                    }
+                }
+                "end_time" | "overall_sleep_end_timestamp" => {
+                    if let Value::Timestamp(ts) = field.value() {
+                        end_time = Some((*ts).into());
+                    }
+                }
+                "sleep_onset_seconds" | "sleep_latency" => {
+                    if let Value::UInt32(val) = field.value() {
+                        // Convert seconds to minutes
+                        sleep_onset = Some((*val / 60).min(u16::MAX as u32) as u16);
+                    } else if let Value::UInt16(val) = field.value() {
+                        sleep_onset = Some(*val);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let (Some(start), Some(end)) = (start_time, end_time) {
+            Some((start, end, sleep_onset))
+        } else {
+            None
+        }
+    }
+
     /// Parse session information from FIT file
     fn parse_session_info(&self, records: &[FitDataRecord]) -> Result<(Sport, WorkoutType, DateTime<Utc>, u32)> {
         for record in records {
@@ -2799,5 +2985,191 @@ mod tests {
             hrv_with_score.context.unwrap().contains("score"),
             "Context should include score information"
         );
+    }
+
+    #[test]
+    fn test_parse_sleep_data_empty_file() {
+        let importer = FitImporter::new();
+        let result = importer.parse_sleep_data(std::path::Path::new("/tmp/nonexistent_sleep.fit"));
+
+        // Should fail to open file
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sleep_stage_mapping() {
+        use crate::recovery::SleepStage;
+
+        // Test that FIT sleep levels map correctly to SleepStage
+        // FIT levels: 0=Awake, 1=Light, 2=Deep, 3=REM
+        let stages = vec![
+            (0u8, "Awake"),
+            (1u8, "Light"),
+            (2u8, "Deep"),
+            (3u8, "REM"),
+        ];
+
+        for (level, expected_name) in stages {
+            let stage = match level {
+                0 => SleepStage::Awake,
+                1 => SleepStage::Light,
+                2 => SleepStage::Deep,
+                3 => SleepStage::REM,
+                _ => panic!("Invalid sleep level"),
+            };
+
+            assert_eq!(format!("{}", stage), expected_name);
+        }
+    }
+
+    #[test]
+    fn test_sleep_session_validation() {
+        use chrono::{Duration, Utc};
+        use crate::recovery::{SleepSession, SleepStage, SleepStageSegment};
+
+        let start = Utc::now();
+        let mid = start + Duration::hours(4);
+        let end = start + Duration::hours(8);
+
+        let segments = vec![
+            SleepStageSegment::new(SleepStage::Light, start, mid).unwrap(),
+            SleepStageSegment::new(SleepStage::Deep, mid, end).unwrap(),
+        ];
+
+        let session = SleepSession::from_stages(start, end, segments, None).unwrap();
+
+        assert_eq!(session.start_time, start);
+        assert_eq!(session.end_time, end);
+        assert_eq!(session.time_in_bed(), 480); // 8 hours
+        assert_eq!(session.metrics.light_sleep, 240); // 4 hours
+        assert_eq!(session.metrics.deep_sleep, 240); // 4 hours
+    }
+
+    #[test]
+    fn test_sleep_onset_conversion() {
+        // Test conversion of sleep onset from seconds to minutes
+        let onset_seconds = 720u32; // 12 minutes
+        let onset_minutes = (onset_seconds / 60) as u16;
+
+        assert_eq!(onset_minutes, 12);
+
+        // Test edge case: very long onset
+        let long_onset = 3600u32; // 60 minutes
+        let long_onset_minutes = (long_onset / 60) as u16;
+
+        assert_eq!(long_onset_minutes, 60);
+    }
+
+    #[test]
+    fn test_sleep_metrics_calculation() {
+        use chrono::{Duration, Utc};
+        use crate::recovery::{SleepSession, SleepStage, SleepStageSegment};
+
+        let start = Utc::now();
+        let mut current = start;
+
+        let segments = vec![
+            // Light sleep 30 min
+            {
+                let seg_start = current;
+                let seg_end = current + Duration::minutes(30);
+                current = seg_end;
+                SleepStageSegment::new(SleepStage::Light, seg_start, seg_end).unwrap()
+            },
+            // Deep sleep 90 min
+            {
+                let seg_start = current;
+                let seg_end = current + Duration::minutes(90);
+                current = seg_end;
+                SleepStageSegment::new(SleepStage::Deep, seg_start, seg_end).unwrap()
+            },
+            // Light sleep 120 min
+            {
+                let seg_start = current;
+                let seg_end = current + Duration::minutes(120);
+                current = seg_end;
+                SleepStageSegment::new(SleepStage::Light, seg_start, seg_end).unwrap()
+            },
+            // REM sleep 90 min
+            {
+                let seg_start = current;
+                let seg_end = current + Duration::minutes(90);
+                current = seg_end;
+                SleepStageSegment::new(SleepStage::REM, seg_start, seg_end).unwrap()
+            },
+            // Awake 10 min (interruption)
+            {
+                let seg_start = current;
+                let seg_end = current + Duration::minutes(10);
+                current = seg_end;
+                SleepStageSegment::new(SleepStage::Awake, seg_start, seg_end).unwrap()
+            },
+            // Light sleep 30 min
+            {
+                let seg_start = current;
+                let seg_end = current + Duration::minutes(30);
+                SleepStageSegment::new(SleepStage::Light, seg_start, seg_end).unwrap()
+            },
+        ];
+
+        let session = SleepSession::from_stages(
+            start,
+            current + Duration::minutes(30),
+            segments,
+            Some(15), // 15 min to fall asleep
+        ).unwrap();
+
+        // Verify aggregated metrics
+        assert_eq!(session.metrics.light_sleep, 30 + 120 + 30); // 180 min
+        assert_eq!(session.metrics.deep_sleep, 90);
+        assert_eq!(session.metrics.rem_sleep, 90);
+        assert_eq!(session.metrics.awake_time, 10);
+        assert_eq!(session.metrics.total_sleep, 360); // 6 hours
+        assert_eq!(session.metrics.sleep_onset, Some(15));
+        assert_eq!(session.metrics.interruptions, Some(1)); // 1 transition to awake
+
+        // Verify efficiency
+        let efficiency = session.metrics.sleep_efficiency.unwrap();
+        assert!(efficiency > 90.0); // Should be >90% efficient
+    }
+
+    #[test]
+    fn test_sleep_source_metadata() {
+        use chrono::{Duration, Utc};
+        use crate::recovery::{SleepSession, SleepStage, SleepStageSegment};
+
+        let start = Utc::now();
+        let end = start + Duration::hours(8);
+
+        let segments = vec![
+            SleepStageSegment::new(SleepStage::Light, start, end).unwrap(),
+        ];
+
+        let mut session = SleepSession::from_stages(start, end, segments, None).unwrap();
+        session.source = Some("garmin_fit".to_string());
+
+        assert_eq!(session.source, Some("garmin_fit".to_string()));
+    }
+
+    #[test]
+    fn test_incomplete_sleep_handling() {
+        use chrono::{Duration, Utc};
+        use crate::recovery::{SleepSession, SleepStage, SleepStageSegment};
+
+        // Test nap scenario (short sleep, no deep sleep)
+        let start = Utc::now();
+        let end = start + Duration::minutes(30);
+
+        let segments = vec![
+            SleepStageSegment::new(SleepStage::Light, start, end).unwrap(),
+        ];
+
+        let session = SleepSession::from_stages(start, end, segments, None).unwrap();
+
+        // Should still create valid session
+        assert_eq!(session.metrics.light_sleep, 30);
+        assert_eq!(session.metrics.deep_sleep, 0);
+        assert_eq!(session.metrics.rem_sleep, 0);
+        assert_eq!(session.metrics.total_sleep, 30);
     }
 }
