@@ -1,7 +1,8 @@
-//! Recovery, HRV (Heart Rate Variability), and Sleep Tracking
+//! Recovery, HRV, Sleep, Body Battery, and Physiological Monitoring
 //!
-//! This module provides data structures and functionality for tracking athlete recovery
-//! through Heart Rate Variability (HRV) measurements and sleep analysis.
+//! This module provides comprehensive data structures and functionality for tracking athlete
+//! recovery through Heart Rate Variability (HRV), sleep analysis, Body Battery energy tracking,
+//! and physiological monitoring.
 //!
 //! # Sports Science Background
 //!
@@ -839,6 +840,379 @@ impl fmt::Display for SleepValidationError {
 
 impl std::error::Error for SleepValidationError {}
 
+//
+// ============================================================================
+// BODY BATTERY & PHYSIOLOGICAL MONITORING
+// ============================================================================
+//
+
+/// Body Battery energy tracking data
+///
+/// # Sports Science Background
+///
+/// Body Battery is Garmin's proprietary energy monitoring system that estimates
+/// your body's energy reserves on a scale of 0-100. It combines:
+///
+/// - **Stress**: Drains battery during physical/mental stress
+/// - **Rest**: Charges battery during relaxation and sleep
+/// - **Activity**: Drains battery based on intensity and duration
+/// - **Sleep Quality**: Primary charging period, quality affects charge rate
+///
+/// # Energy Dynamics
+///
+/// - **Drain Rate**: Energy consumed per hour during activity/stress (0-20+ per hour)
+/// - **Charge Rate**: Energy restored per hour during rest/sleep (0-30+ per hour)
+/// - **Daily Pattern**: Typically drains during day, charges overnight
+///
+/// # Interpretation
+///
+/// - 75-100: High energy reserves, ready for intense training
+/// - 50-74: Moderate energy, suitable for moderate activity
+/// - 25-49: Low energy, consider light activity or rest
+/// - 0-24: Very low energy, prioritize recovery
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BodyBatteryData {
+    /// Battery level at start of period (0-100)
+    pub start_level: u8,
+    /// Battery level at end of period (0-100)
+    pub end_level: u8,
+    /// Rate of battery drain per hour during activity
+    pub drain_rate: Option<f64>,
+    /// Rate of battery charge per hour during rest/sleep
+    pub charge_rate: Option<f64>,
+    /// Lowest battery level reached in period
+    pub lowest_level: Option<u8>,
+    /// Highest battery level reached in period
+    pub highest_level: Option<u8>,
+    /// Timestamp for this measurement
+    pub timestamp: DateTime<Utc>,
+}
+
+impl BodyBatteryData {
+    /// Create new Body Battery data with validation
+    ///
+    /// # Arguments
+    ///
+    /// * `start_level` - Starting battery level (0-100)
+    /// * `end_level` - Ending battery level (0-100)
+    /// * `duration_hours` - Duration of measurement period in hours
+    /// * `timestamp` - When the measurement was taken
+    ///
+    /// # Returns
+    ///
+    /// Result containing validated Body Battery data or validation error
+    pub fn new(
+        start_level: u8,
+        end_level: u8,
+        duration_hours: Option<f64>,
+        timestamp: DateTime<Utc>,
+    ) -> Result<Self, BodyBatteryValidationError> {
+        // Validate battery levels are in valid range (0-100)
+        if start_level > 100 {
+            return Err(BodyBatteryValidationError::InvalidLevel(start_level));
+        }
+        if end_level > 100 {
+            return Err(BodyBatteryValidationError::InvalidLevel(end_level));
+        }
+
+        // Calculate drain or charge rate if duration provided
+        let (drain_rate, charge_rate) = if let Some(hours) = duration_hours {
+            if hours <= 0.0 {
+                return Err(BodyBatteryValidationError::InvalidDuration(hours));
+            }
+
+            let change = end_level as f64 - start_level as f64;
+            if change < 0.0 {
+                // Battery drained
+                (Some(-change / hours), None)
+            } else if change > 0.0 {
+                // Battery charged
+                (None, Some(change / hours))
+            } else {
+                // No change
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+
+        Ok(BodyBatteryData {
+            start_level,
+            end_level,
+            drain_rate,
+            charge_rate,
+            lowest_level: Some(start_level.min(end_level)),
+            highest_level: Some(start_level.max(end_level)),
+            timestamp,
+        })
+    }
+
+    /// Calculate net battery change
+    pub fn net_change(&self) -> i16 {
+        self.end_level as i16 - self.start_level as i16
+    }
+
+    /// Check if battery is draining
+    pub fn is_draining(&self) -> bool {
+        self.end_level < self.start_level
+    }
+
+    /// Check if battery is charging
+    pub fn is_charging(&self) -> bool {
+        self.end_level > self.start_level
+    }
+
+    /// Get energy status interpretation
+    pub fn energy_status(&self) -> EnergyStatus {
+        match self.end_level {
+            75..=100 => EnergyStatus::High,
+            50..=74 => EnergyStatus::Moderate,
+            25..=49 => EnergyStatus::Low,
+            _ => EnergyStatus::VeryLow, // 0-24 and any invalid values
+        }
+    }
+}
+
+/// Energy status categories based on Body Battery level
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EnergyStatus {
+    /// High energy reserves (75-100)
+    High,
+    /// Moderate energy (50-74)
+    Moderate,
+    /// Low energy (25-49)
+    Low,
+    /// Very low energy (0-24)
+    VeryLow,
+}
+
+impl fmt::Display for EnergyStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EnergyStatus::High => write!(f, "High"),
+            EnergyStatus::Moderate => write!(f, "Moderate"),
+            EnergyStatus::Low => write!(f, "Low"),
+            EnergyStatus::VeryLow => write!(f, "Very Low"),
+        }
+    }
+}
+
+/// Physiological monitoring metrics
+///
+/// # Sports Science Background
+///
+/// These metrics provide insight into overall health and recovery status:
+///
+/// - **Resting Heart Rate (RHR)**: Lower RHR typically indicates better cardiovascular fitness.
+///   Athletes often have RHR 40-60 bpm. Elevated RHR can indicate fatigue, stress, or illness.
+///
+/// - **Respiration Rate**: Normal resting respiration is 12-20 breaths/min. Lower rates during
+///   sleep indicate better recovery. Elevated rates may signal stress or respiratory issues.
+///
+/// - **Pulse Oximetry (SpO2)**: Blood oxygen saturation. Normal is 95-100%. Lower values
+///   (<90%) may indicate altitude, respiratory issues, or sleep apnea.
+///
+/// - **Stress Score**: Composite metric (0-100) combining HRV, heart rate, and other factors.
+///   Higher scores indicate more stress/sympathetic activity.
+///
+/// - **Recovery Time**: Estimated hours until full recovery. Based on training load, HRV,
+///   and other recovery markers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PhysiologicalMetrics {
+    /// Resting heart rate in beats per minute
+    pub resting_hr: Option<u8>,
+    /// Respiration rate in breaths per minute
+    pub respiration_rate: Option<f64>,
+    /// Pulse oximetry (SpO2) percentage
+    pub pulse_ox: Option<u8>,
+    /// Stress score (0-100, higher = more stress)
+    pub stress_score: Option<u8>,
+    /// Estimated recovery time in hours
+    pub recovery_time: Option<u16>,
+    /// Timestamp for this measurement
+    pub timestamp: DateTime<Utc>,
+}
+
+impl PhysiologicalMetrics {
+    /// Create new physiological metrics with validation
+    ///
+    /// # Arguments
+    ///
+    /// * `resting_hr` - Resting heart rate in bpm (optional)
+    /// * `respiration_rate` - Respiration rate in breaths/min (optional)
+    /// * `pulse_ox` - SpO2 percentage (optional)
+    /// * `stress_score` - Stress score 0-100 (optional)
+    /// * `recovery_time` - Recovery time in hours (optional)
+    /// * `timestamp` - When the measurement was taken
+    ///
+    /// # Returns
+    ///
+    /// Result containing validated metrics or validation error
+    pub fn new(
+        resting_hr: Option<u8>,
+        respiration_rate: Option<f64>,
+        pulse_ox: Option<u8>,
+        stress_score: Option<u8>,
+        recovery_time: Option<u16>,
+        timestamp: DateTime<Utc>,
+    ) -> Result<Self, PhysiologicalValidationError> {
+        // Validate resting heart rate (30-120 bpm reasonable range)
+        if let Some(hr) = resting_hr {
+            if !(30..=120).contains(&hr) {
+                return Err(PhysiologicalValidationError::InvalidRestingHr(hr));
+            }
+        }
+
+        // Validate respiration rate (5-40 breaths/min reasonable range)
+        if let Some(rr) = respiration_rate {
+            if rr < 5.0 || rr > 40.0 {
+                return Err(PhysiologicalValidationError::InvalidRespirationRate(rr));
+            }
+        }
+
+        // Validate pulse oximetry (70-100% reasonable range)
+        if let Some(spo2) = pulse_ox {
+            if spo2 < 70 || spo2 > 100 {
+                return Err(PhysiologicalValidationError::InvalidPulseOx(spo2));
+            }
+        }
+
+        // Validate stress score (0-100)
+        if let Some(stress) = stress_score {
+            if stress > 100 {
+                return Err(PhysiologicalValidationError::InvalidStressScore(stress));
+            }
+        }
+
+        Ok(PhysiologicalMetrics {
+            resting_hr,
+            respiration_rate,
+            pulse_ox,
+            stress_score,
+            recovery_time,
+            timestamp,
+        })
+    }
+
+    /// Get stress level interpretation
+    pub fn stress_level(&self) -> Option<StressLevel> {
+        self.stress_score.map(|score| match score {
+            0..=25 => StressLevel::Low,
+            26..=50 => StressLevel::Moderate,
+            51..=75 => StressLevel::High,
+            _ => StressLevel::VeryHigh, // 76-100 and any invalid values
+        })
+    }
+
+    /// Check if any metric indicates potential health concern
+    pub fn has_health_concerns(&self) -> bool {
+        // Elevated resting HR
+        if let Some(hr) = self.resting_hr {
+            if hr > 100 {
+                return true;
+            }
+        }
+
+        // Low SpO2
+        if let Some(spo2) = self.pulse_ox {
+            if spo2 < 90 {
+                return true;
+            }
+        }
+
+        // Very high stress
+        if let Some(stress) = self.stress_score {
+            if stress > 75 {
+                return true;
+            }
+        }
+
+        false
+    }
+}
+
+/// Stress level categories
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StressLevel {
+    /// Low stress (0-25)
+    Low,
+    /// Moderate stress (26-50)
+    Moderate,
+    /// High stress (51-75)
+    High,
+    /// Very high stress (76-100)
+    VeryHigh,
+}
+
+impl fmt::Display for StressLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StressLevel::Low => write!(f, "Low"),
+            StressLevel::Moderate => write!(f, "Moderate"),
+            StressLevel::High => write!(f, "High"),
+            StressLevel::VeryHigh => write!(f, "Very High"),
+        }
+    }
+}
+
+/// Body Battery validation errors
+#[derive(Debug, Clone, PartialEq)]
+pub enum BodyBatteryValidationError {
+    /// Battery level outside valid range (0-100)
+    InvalidLevel(u8),
+    /// Invalid duration value
+    InvalidDuration(f64),
+}
+
+impl fmt::Display for BodyBatteryValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BodyBatteryValidationError::InvalidLevel(level) => {
+                write!(f, "Invalid battery level: {} (must be 0-100)", level)
+            }
+            BodyBatteryValidationError::InvalidDuration(duration) => {
+                write!(f, "Invalid duration: {} (must be > 0)", duration)
+            }
+        }
+    }
+}
+
+impl std::error::Error for BodyBatteryValidationError {}
+
+/// Physiological metrics validation errors
+#[derive(Debug, Clone, PartialEq)]
+pub enum PhysiologicalValidationError {
+    /// Resting HR outside valid range (30-120 bpm)
+    InvalidRestingHr(u8),
+    /// Respiration rate outside valid range (5-40 breaths/min)
+    InvalidRespirationRate(f64),
+    /// Pulse oximetry outside valid range (70-100%)
+    InvalidPulseOx(u8),
+    /// Stress score outside valid range (0-100)
+    InvalidStressScore(u8),
+}
+
+impl fmt::Display for PhysiologicalValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PhysiologicalValidationError::InvalidRestingHr(hr) => {
+                write!(f, "Invalid resting HR: {} (must be 30-120 bpm)", hr)
+            }
+            PhysiologicalValidationError::InvalidRespirationRate(rr) => {
+                write!(f, "Invalid respiration rate: {} (must be 5-40 breaths/min)", rr)
+            }
+            PhysiologicalValidationError::InvalidPulseOx(spo2) => {
+                write!(f, "Invalid pulse oximetry: {} (must be 70-100%)", spo2)
+            }
+            PhysiologicalValidationError::InvalidStressScore(score) => {
+                write!(f, "Invalid stress score: {} (must be 0-100)", score)
+            }
+        }
+    }
+}
+
+impl std::error::Error for PhysiologicalValidationError {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1414,5 +1788,271 @@ mod tests {
         // Expected: deep 15 + light ~8.5 + rem 15 + eff ~29.4 + dur ~14.3 + int 0 = ~82
         let score = metrics.sleep_score.unwrap();
         assert!(score >= 80 && score <= 85, "Disrupted sleep score {} should be 80-85", score);
+    }
+
+    // Body Battery tests
+    #[test]
+    fn test_body_battery_creation() {
+        let now = Utc::now();
+
+        // Battery draining during activity
+        let battery = BodyBatteryData::new(80, 50, Some(3.0), now).unwrap();
+        assert_eq!(battery.start_level, 80);
+        assert_eq!(battery.end_level, 50);
+        assert_eq!(battery.net_change(), -30);
+        assert!(battery.is_draining());
+        assert!(!battery.is_charging());
+        assert_eq!(battery.drain_rate, Some(10.0)); // 30 points in 3 hours = 10/hour
+        assert_eq!(battery.charge_rate, None);
+    }
+
+    #[test]
+    fn test_body_battery_charging() {
+        let now = Utc::now();
+
+        // Battery charging during sleep
+        let battery = BodyBatteryData::new(30, 85, Some(8.0), now).unwrap();
+        assert_eq!(battery.start_level, 30);
+        assert_eq!(battery.end_level, 85);
+        assert_eq!(battery.net_change(), 55);
+        assert!(!battery.is_draining());
+        assert!(battery.is_charging());
+        assert_eq!(battery.drain_rate, None);
+        assert_eq!(battery.charge_rate, Some(6.875)); // 55 points in 8 hours
+    }
+
+    #[test]
+    fn test_body_battery_invalid_level() {
+        let now = Utc::now();
+
+        // Invalid start level
+        let result = BodyBatteryData::new(150, 50, Some(1.0), now);
+        assert!(result.is_err());
+
+        if let Err(BodyBatteryValidationError::InvalidLevel(level)) = result {
+            assert_eq!(level, 150);
+        }
+    }
+
+    #[test]
+    fn test_body_battery_invalid_duration() {
+        let now = Utc::now();
+
+        // Invalid duration (negative)
+        let result = BodyBatteryData::new(80, 50, Some(-1.0), now);
+        assert!(result.is_err());
+
+        if let Err(BodyBatteryValidationError::InvalidDuration(d)) = result {
+            assert_eq!(d, -1.0);
+        }
+    }
+
+    #[test]
+    fn test_body_battery_energy_status() {
+        let now = Utc::now();
+
+        // High energy
+        let battery = BodyBatteryData::new(90, 90, None, now).unwrap();
+        assert_eq!(battery.energy_status(), EnergyStatus::High);
+
+        // Moderate energy
+        let battery = BodyBatteryData::new(60, 60, None, now).unwrap();
+        assert_eq!(battery.energy_status(), EnergyStatus::Moderate);
+
+        // Low energy
+        let battery = BodyBatteryData::new(40, 40, None, now).unwrap();
+        assert_eq!(battery.energy_status(), EnergyStatus::Low);
+
+        // Very low energy
+        let battery = BodyBatteryData::new(15, 15, None, now).unwrap();
+        assert_eq!(battery.energy_status(), EnergyStatus::VeryLow);
+    }
+
+    #[test]
+    fn test_energy_status_display() {
+        assert_eq!(EnergyStatus::High.to_string(), "High");
+        assert_eq!(EnergyStatus::Moderate.to_string(), "Moderate");
+        assert_eq!(EnergyStatus::Low.to_string(), "Low");
+        assert_eq!(EnergyStatus::VeryLow.to_string(), "Very Low");
+    }
+
+    // Physiological Metrics tests
+    #[test]
+    fn test_physiological_metrics_creation() {
+        let now = Utc::now();
+
+        let metrics = PhysiologicalMetrics::new(
+            Some(55),    // resting HR
+            Some(14.5),  // respiration rate
+            Some(97),    // pulse ox
+            Some(35),    // stress score
+            Some(12),    // recovery time
+            now,
+        ).unwrap();
+
+        assert_eq!(metrics.resting_hr, Some(55));
+        assert_eq!(metrics.respiration_rate, Some(14.5));
+        assert_eq!(metrics.pulse_ox, Some(97));
+        assert_eq!(metrics.stress_score, Some(35));
+        assert_eq!(metrics.recovery_time, Some(12));
+    }
+
+    #[test]
+    fn test_physiological_metrics_invalid_resting_hr() {
+        let now = Utc::now();
+
+        // HR too low
+        let result = PhysiologicalMetrics::new(Some(25), None, None, None, None, now);
+        assert!(result.is_err());
+
+        if let Err(PhysiologicalValidationError::InvalidRestingHr(hr)) = result {
+            assert_eq!(hr, 25);
+        }
+
+        // HR too high
+        let result = PhysiologicalMetrics::new(Some(130), None, None, None, None, now);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_physiological_metrics_invalid_respiration() {
+        let now = Utc::now();
+
+        // Rate too low
+        let result = PhysiologicalMetrics::new(None, Some(3.0), None, None, None, now);
+        assert!(result.is_err());
+
+        if let Err(PhysiologicalValidationError::InvalidRespirationRate(rr)) = result {
+            assert_eq!(rr, 3.0);
+        }
+
+        // Rate too high
+        let result = PhysiologicalMetrics::new(None, Some(50.0), None, None, None, now);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_physiological_metrics_invalid_pulse_ox() {
+        let now = Utc::now();
+
+        // SpO2 too low
+        let result = PhysiologicalMetrics::new(None, None, Some(60), None, None, now);
+        assert!(result.is_err());
+
+        if let Err(PhysiologicalValidationError::InvalidPulseOx(spo2)) = result {
+            assert_eq!(spo2, 60);
+        }
+    }
+
+    #[test]
+    fn test_physiological_metrics_invalid_stress_score() {
+        let now = Utc::now();
+
+        // Stress score too high
+        let result = PhysiologicalMetrics::new(None, None, None, Some(150), None, now);
+        assert!(result.is_err());
+
+        if let Err(PhysiologicalValidationError::InvalidStressScore(score)) = result {
+            assert_eq!(score, 150);
+        }
+    }
+
+    #[test]
+    fn test_stress_level_interpretation() {
+        let now = Utc::now();
+
+        // Low stress
+        let metrics = PhysiologicalMetrics::new(None, None, None, Some(15), None, now).unwrap();
+        assert_eq!(metrics.stress_level(), Some(StressLevel::Low));
+
+        // Moderate stress
+        let metrics = PhysiologicalMetrics::new(None, None, None, Some(40), None, now).unwrap();
+        assert_eq!(metrics.stress_level(), Some(StressLevel::Moderate));
+
+        // High stress
+        let metrics = PhysiologicalMetrics::new(None, None, None, Some(65), None, now).unwrap();
+        assert_eq!(metrics.stress_level(), Some(StressLevel::High));
+
+        // Very high stress
+        let metrics = PhysiologicalMetrics::new(None, None, None, Some(85), None, now).unwrap();
+        assert_eq!(metrics.stress_level(), Some(StressLevel::VeryHigh));
+    }
+
+    #[test]
+    fn test_stress_level_display() {
+        assert_eq!(StressLevel::Low.to_string(), "Low");
+        assert_eq!(StressLevel::Moderate.to_string(), "Moderate");
+        assert_eq!(StressLevel::High.to_string(), "High");
+        assert_eq!(StressLevel::VeryHigh.to_string(), "Very High");
+    }
+
+    #[test]
+    fn test_health_concerns_detection() {
+        let now = Utc::now();
+
+        // Elevated resting HR
+        let metrics = PhysiologicalMetrics::new(Some(105), None, None, None, None, now).unwrap();
+        assert!(metrics.has_health_concerns());
+
+        // Low SpO2
+        let metrics = PhysiologicalMetrics::new(None, None, Some(88), None, None, now).unwrap();
+        assert!(metrics.has_health_concerns());
+
+        // Very high stress
+        let metrics = PhysiologicalMetrics::new(None, None, None, Some(80), None, now).unwrap();
+        assert!(metrics.has_health_concerns());
+
+        // Normal metrics
+        let metrics = PhysiologicalMetrics::new(Some(60), Some(15.0), Some(98), Some(30), None, now).unwrap();
+        assert!(!metrics.has_health_concerns());
+    }
+
+    #[test]
+    fn test_body_battery_no_duration() {
+        let now = Utc::now();
+
+        // No duration provided - rates should be None
+        let battery = BodyBatteryData::new(70, 40, None, now).unwrap();
+        assert_eq!(battery.drain_rate, None);
+        assert_eq!(battery.charge_rate, None);
+        assert_eq!(battery.lowest_level, Some(40));
+        assert_eq!(battery.highest_level, Some(70));
+    }
+
+    #[test]
+    fn test_body_battery_serialization() {
+        let now = Utc::now();
+        let battery = BodyBatteryData::new(80, 50, Some(3.0), now).unwrap();
+
+        // Test JSON serialization
+        let json = serde_json::to_string(&battery).unwrap();
+        let deserialized: BodyBatteryData = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(battery.start_level, deserialized.start_level);
+        assert_eq!(battery.end_level, deserialized.end_level);
+        assert_eq!(battery.drain_rate, deserialized.drain_rate);
+    }
+
+    #[test]
+    fn test_physiological_metrics_serialization() {
+        let now = Utc::now();
+        let metrics = PhysiologicalMetrics::new(
+            Some(55),
+            Some(14.5),
+            Some(97),
+            Some(35),
+            Some(12),
+            now,
+        ).unwrap();
+
+        // Test JSON serialization
+        let json = serde_json::to_string(&metrics).unwrap();
+        let deserialized: PhysiologicalMetrics = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(metrics.resting_hr, deserialized.resting_hr);
+        assert_eq!(metrics.respiration_rate, deserialized.respiration_rate);
+        assert_eq!(metrics.pulse_ox, deserialized.pulse_ox);
+        assert_eq!(metrics.stress_score, deserialized.stress_score);
+        assert_eq!(metrics.recovery_time, deserialized.recovery_time);
     }
 }
