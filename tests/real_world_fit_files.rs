@@ -8,7 +8,7 @@
 ///
 /// Test files should be anonymized (PII removed, GPS stripped) before committing.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use trainrs::import::{fit::FitImporter, ImportFormat};
 use trainrs::models::{Sport, Workout};
 
@@ -37,7 +37,7 @@ fn validate_workout(workout: &Workout, context: &str) {
     // Sport should be valid
     match workout.sport {
         Sport::Cycling | Sport::Running | Sport::Swimming |
-        Sport::Triathlon | Sport::Other => {},
+        Sport::Triathlon | Sport::Rowing | Sport::CrossTraining => {},
     }
 
     // If we have power data, it should be reasonable
