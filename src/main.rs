@@ -10,21 +10,23 @@ use crate::models::DataPoint;
 mod config;
 mod database;
 mod data_management;
+mod device_quirks;
+mod error;
 mod export;
 mod import;
+mod logging;
 mod models;
 mod multisport;
 mod performance;
 mod pmc;
 mod power;
+mod recovery;
 mod running;
+mod training_effect;
 mod training_plan;
 mod tss;
-mod zones;
-mod error;
-mod logging;
-mod training_effect;
 mod vo2max;
+mod zones;
 
 // Test utilities have been integrated into individual test files
 
@@ -408,6 +410,45 @@ enum Commands {
     Athlete {
         #[command(subcommand)]
         command: AthleteCommands,
+    },
+
+    /// Device-specific quirks and information
+    Device {
+        #[command(subcommand)]
+        command: DeviceCommands,
+    },
+}
+
+/// Device quirks and information subcommands
+#[derive(Subcommand)]
+enum DeviceCommands {
+    /// Display device information from a FIT file
+    Info {
+        /// FIT file path
+        #[arg(short, long)]
+        file: PathBuf,
+    },
+
+    /// List known device quirks
+    List {
+        /// Filter by manufacturer ID
+        #[arg(long)]
+        manufacturer_id: Option<u16>,
+
+        /// Filter by product ID
+        #[arg(long)]
+        product_id: Option<u16>,
+
+        /// Show only enabled quirks
+        #[arg(long)]
+        enabled_only: bool,
+    },
+
+    /// Export device quirk registry to TOML file
+    Export {
+        /// Output TOML file path
+        #[arg(short, long)]
+        output: PathBuf,
     },
 }
 
@@ -1652,6 +1693,13 @@ fn main() -> Result<()> {
         Commands::Athlete { command } => {
             handle_athlete_commands(command).unwrap_or_else(|e| {
                 eprintln!("{}", format!("Athlete management error: {}", e).red());
+                std::process::exit(1);
+            });
+        }
+
+        Commands::Device { command } => {
+            handle_device_commands(command).unwrap_or_else(|e| {
+                eprintln!("{}", format!("Device command error: {}", e).red());
                 std::process::exit(1);
             });
         }
@@ -5349,6 +5397,242 @@ fn handle_athlete_export(
     println!("Format:       {}", format.cyan());
     println!("Include Sports: {}", include_sports);
     println!("Include History: {}", include_history);
+
+    Ok(())
+}
+
+/// Handle device commands
+fn handle_device_commands(command: DeviceCommands) -> Result<()> {
+    use colored::Colorize;
+
+    println!("{}", "🔧 Device Management".cyan().bold());
+    println!("====================\n");
+
+    match command {
+        DeviceCommands::Info { file } => handle_device_info(file),
+        DeviceCommands::List {
+            manufacturer_id,
+            product_id,
+            enabled_only,
+        } => handle_device_list(manufacturer_id, product_id, enabled_only),
+        DeviceCommands::Export { output } => handle_device_export(output),
+    }
+}
+
+/// Display device information from a FIT file
+fn handle_device_info(file: PathBuf) -> Result<()> {
+    use anyhow::Context;
+    use crate::device_quirks::{DeviceInfo, QuirkRegistry};
+    use crate::import::fit::FitImporter;
+    use colored::Colorize;
+    use fitparser::FitDataRecord;
+    use std::fs::File;
+
+    println!("{}", format!("📱 Analyzing FIT file: {}", file.display()).bold());
+    println!();
+
+    // Parse FIT file
+    let mut fit_file = File::open(&file)
+        .with_context(|| format!("Failed to open FIT file: {}", file.display()))?;
+
+    let records: Vec<FitDataRecord> = fitparser::from_reader(&mut fit_file)
+        .map_err(|e| anyhow::anyhow!("Failed to parse FIT file: {:?}", e))?;
+
+    // Extract device info using FitImporter's method
+    let importer = FitImporter::new();
+
+    // We need to extract device info manually since extract_device_info is private
+    let mut manufacturer_id: Option<u16> = None;
+    let mut product_id: Option<u16> = None;
+    let mut firmware_version: Option<u16> = None;
+
+    for record in &records {
+        if record.kind() == fitparser::profile::MesgNum::FileId {
+            for field in record.fields() {
+                match field.name() {
+                    "manufacturer" => {
+                        if let fitparser::Value::UInt16(id) = field.value() {
+                            manufacturer_id = Some(*id);
+                        }
+                    }
+                    "product" => {
+                        if let fitparser::Value::UInt16(id) = field.value() {
+                            product_id = Some(*id);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if record.kind() == fitparser::profile::MesgNum::DeviceInfo {
+            for field in record.fields() {
+                if field.name() == "software_version" {
+                    if let fitparser::Value::UInt16(ver) = field.value() {
+                        firmware_version = Some(*ver);
+                    }
+                }
+            }
+        }
+    }
+
+    if let (Some(mfr_id), Some(prod_id)) = (manufacturer_id, product_id) {
+        let mut device = DeviceInfo::new(mfr_id, prod_id);
+        if let Some(fw) = firmware_version {
+            device = device.with_firmware(fw);
+        }
+
+        // Enrich with names
+        let registry = importer.quirk_registry();
+        if let Some(mfr_name) = registry.get_manufacturer_name(device.manufacturer_id) {
+            let prod_name = registry
+                .get_product_name(device.manufacturer_id, device.product_id)
+                .unwrap_or("Unknown Product");
+            device = device.with_names(mfr_name.to_string(), prod_name.to_string());
+        }
+
+        // Display device info
+        println!("{}", "DEVICE INFORMATION".green().bold());
+        println!("─────────────────────────────────");
+        println!("Manufacturer ID:   {} ({})",
+            device.manufacturer_id.to_string().cyan(),
+            device.manufacturer_name.as_deref().unwrap_or("Unknown").yellow()
+        );
+        println!("Product ID:        {} ({})",
+            device.product_id.to_string().cyan(),
+            device.product_name.as_deref().unwrap_or("Unknown").yellow()
+        );
+        if let Some(fw) = device.firmware_version {
+            println!("Firmware Version:  {}", fw.to_string().cyan());
+        }
+        println!();
+
+        // Check for applicable quirks
+        let quirks = registry.get_applicable_quirks(&device);
+        if !quirks.is_empty() {
+            println!("{}", "APPLICABLE QUIRKS".green().bold());
+            println!("─────────────────────────────────");
+            for quirk in quirks {
+                println!("• {}", quirk.description.yellow());
+                println!("  Type: {:?}", quirk.quirk_type);
+                println!("  Enabled by default: {}",
+                    if quirk.enabled_by_default { "Yes".green() } else { "No".red() }
+                );
+                println!();
+            }
+        } else {
+            println!("{}", "No device-specific quirks found for this device.".dimmed());
+        }
+    } else {
+        println!("{}", "⚠ Could not extract device information from FIT file".yellow());
+    }
+
+    Ok(())
+}
+
+/// List known device quirks
+fn handle_device_list(
+    manufacturer_id: Option<u16>,
+    product_id: Option<u16>,
+    enabled_only: bool,
+) -> Result<()> {
+    use crate::device_quirks::QuirkRegistry;
+    use colored::Colorize;
+
+    let registry = QuirkRegistry::with_defaults();
+
+    println!("{}", "KNOWN DEVICE QUIRKS".green().bold());
+    println!("═══════════════════════════════════════\n");
+
+    let quirks: Vec<_> = registry
+        .quirks
+        .iter()
+        .filter(|q| {
+            if enabled_only && !q.enabled_by_default {
+                return false;
+            }
+            if let Some(mfr) = manufacturer_id {
+                if q.manufacturer_id != mfr {
+                    return false;
+                }
+            }
+            if let Some(prod) = product_id {
+                if q.product_id != prod {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+
+    if quirks.is_empty() {
+        println!("{}", "No quirks match the specified filters.".yellow());
+        return Ok(());
+    }
+
+    println!("Found {} quirk(s)\n", quirks.len().to_string().cyan().bold());
+
+    for (idx, quirk) in quirks.iter().enumerate() {
+        println!("{}", format!("═══ QUIRK #{} ═══", idx + 1).bold());
+
+        let mfr_name = registry.get_manufacturer_name(quirk.manufacturer_id)
+            .unwrap_or("Unknown");
+        let prod_name = registry.get_product_name(quirk.manufacturer_id, quirk.product_id)
+            .unwrap_or("Unknown");
+
+        println!("Device:       {} {} ({}:{})",
+            mfr_name.yellow(),
+            prod_name.yellow(),
+            quirk.manufacturer_id,
+            quirk.product_id
+        );
+
+        println!("Description:  {}", quirk.description.cyan());
+        println!("Type:         {:?}", quirk.quirk_type);
+        println!("Enabled:      {}",
+            if quirk.enabled_by_default { "Yes".green() } else { "No".red() }
+        );
+
+        if let Some((min_fw, max_fw)) = quirk.firmware_version_range {
+            println!("Firmware:     {} - {}", min_fw, max_fw);
+        }
+
+        println!();
+    }
+
+    // Display manufacturer summary
+    println!("\n{}", "KNOWN MANUFACTURERS".green().bold());
+    println!("─────────────────────────────────");
+    for (id, name) in &registry.manufacturers {
+        let count = registry.quirks.iter().filter(|q| q.manufacturer_id == *id).count();
+        println!("{:3}: {} ({} quirk{})",
+            id,
+            name.yellow(),
+            count.to_string().cyan(),
+            if count == 1 { "" } else { "s" }
+        );
+    }
+
+    Ok(())
+}
+
+/// Export device quirk registry to TOML file
+fn handle_device_export(output: PathBuf) -> Result<()> {
+    use anyhow::Context;
+    use crate::device_quirks::QuirkRegistry;
+    use colored::Colorize;
+
+    let registry = QuirkRegistry::with_defaults();
+
+    registry.save_to_file(&output)
+        .with_context(|| format!("Failed to export quirk registry to {}", output.display()))?;
+
+    println!("{}", "✅ Device quirk registry exported successfully".green().bold());
+    println!("File:         {}", output.display().to_string().cyan());
+    println!("Quirks:       {}", registry.quirks.len().to_string().cyan());
+    println!("Manufacturers: {}", registry.manufacturers.len().to_string().cyan());
+    println!("Products:     {}", registry.products.len().to_string().cyan());
+    println!();
+    println!("{}", "You can edit this file and reload it using the import functionality.".dimmed());
 
     Ok(())
 }
