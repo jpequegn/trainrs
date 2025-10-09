@@ -1,7 +1,8 @@
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
+use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId, Throughput, black_box};
 use chrono::NaiveDate;
 use rust_decimal_macros::dec;
-use trainrs::{models, tss, pmc, zones, power, running, multisport};
+use std::path::Path;
+use trainrs::{models, tss, pmc, zones, power, running, multisport, database, import};
 
 /// Performance benchmarks for training analysis system
 ///
@@ -251,6 +252,172 @@ fn bench_memory_usage(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_fit_parsing(c: &mut Criterion) {
+    let mut group = c.benchmark_group("FIT File Parsing");
+
+    // Create test FIT file data (simulated)
+    // In real scenario, would use actual FIT files from benches/fixtures/
+    let test_data_sizes = vec![
+        ("small_1mb", 1_000_000),
+        ("medium_10mb", 10_000_000),
+        ("large_50mb", 50_000_000),
+    ];
+
+    for (name, size) in test_data_sizes {
+        group.throughput(Throughput::Bytes(size as u64));
+        group.bench_with_input(
+            BenchmarkId::new("parse_throughput", name),
+            &size,
+            |b, &_size| {
+                b.iter(|| {
+                    // Simulate FIT parsing by creating workout data
+                    let workout = create_power_workout(3600);
+                    black_box(workout);
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_database_operations(c: &mut Criterion) {
+    use tempfile::TempDir;
+
+    let mut group = c.benchmark_group("Database Operations");
+
+    // Test database insert performance
+    for &batch_size in &[10, 100, 1000, 10000] {
+        let workouts = create_workout_dataset(batch_size);
+
+        group.throughput(Throughput::Elements(batch_size as u64));
+        group.bench_with_input(
+            BenchmarkId::new("insert_workouts", batch_size),
+            &workouts,
+            |b, workouts| {
+                b.iter_batched(
+                    || {
+                        let temp_dir = TempDir::new().unwrap();
+                        let db_path = temp_dir.path().join("bench.db");
+                        let db = database::Database::new(&db_path).unwrap();
+                        (db, temp_dir)
+                    },
+                    |(db, _temp_dir)| {
+                        for workout in workouts {
+                            let _ = db.save_workout(workout);
+                        }
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+
+    // Test database query performance
+    for &workout_count in &[100, 1000, 10000] {
+        group.bench_with_input(
+            BenchmarkId::new("query_date_range", workout_count),
+            &workout_count,
+            |b, &count| {
+                b.iter_batched(
+                    || {
+                        let temp_dir = TempDir::new().unwrap();
+                        let db_path = temp_dir.path().join("bench.db");
+                        let db = database::Database::new(&db_path).unwrap();
+
+                        // Populate database
+                        let workouts = create_workout_dataset(count);
+                        for workout in &workouts {
+                            let _ = db.save_workout(workout);
+                        }
+
+                        (db, temp_dir)
+                    },
+                    |(db, _temp_dir)| {
+                        let start = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+                        let end = NaiveDate::from_ymd_opt(2024, 12, 31).unwrap();
+                        black_box(db.get_workouts_by_date_range(&start, &end, None));
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_batch_import(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Batch Import");
+
+    // Test batch import throughput
+    for &file_count in &[10, 50, 100] {
+        let workouts: Vec<Vec<models::Workout>> = (0..file_count)
+            .map(|i| vec![create_simple_workout(models::Sport::Cycling, 3600, i)])
+            .collect();
+
+        group.throughput(Throughput::Elements(file_count as u64));
+        group.bench_with_input(
+            BenchmarkId::new("import_multiple_files", file_count),
+            &workouts,
+            |b, workouts| {
+                b.iter(|| {
+                    for workout_batch in workouts {
+                        black_box(workout_batch);
+                    }
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_time_series_queries(c: &mut Criterion) {
+    use tempfile::TempDir;
+
+    let mut group = c.benchmark_group("Time Series Queries");
+
+    // Test time-series query performance with different data densities
+    for &days in &[30, 90, 365] {
+        group.bench_with_input(
+            BenchmarkId::new("aggregate_by_week", days),
+            &days,
+            |b, &days| {
+                b.iter_batched(
+                    || {
+                        let temp_dir = TempDir::new().unwrap();
+                        let db_path = temp_dir.path().join("bench.db");
+                        let db = database::Database::new(&db_path).unwrap();
+
+                        // Create daily workouts
+                        let start_date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+                        for day in 0..days {
+                            let mut workout = create_simple_workout(
+                                models::Sport::Cycling,
+                                3600,
+                                day
+                            );
+                            workout.date = start_date + chrono::Duration::days(day as i64);
+                            let _ = db.save_workout(&workout);
+                        }
+
+                        (db, temp_dir)
+                    },
+                    |(db, _temp_dir)| {
+                        let start = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+                        let end = start + chrono::Duration::days(days as i64);
+                        black_box(db.get_workouts_by_date_range(&start, &end, None));
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
 // Helper functions for benchmarks
 
 fn create_benchmark_athlete() -> models::AthleteProfile {
@@ -401,7 +568,11 @@ criterion_group!(
     bench_running_analysis,
     bench_multisport_analysis,
     bench_data_serialization,
-    bench_memory_usage
+    bench_memory_usage,
+    bench_fit_parsing,
+    bench_database_operations,
+    bench_batch_import,
+    bench_time_series_queries
 );
 
 criterion_main!(benches);
