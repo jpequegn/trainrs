@@ -7,7 +7,12 @@ use std::path::Path;
 use uuid::Uuid;
 
 use crate::device_quirks::{DeviceInfo, QuirkRegistry};
-use crate::import::{developer_registry::DeveloperFieldRegistry, validation::WorkoutValidator, ImportFormat};
+use crate::import::{
+    developer_registry::DeveloperFieldRegistry,
+    validation::WorkoutValidator,
+    validation_rules::DataValidator,
+    ImportFormat
+};
 use crate::models::{DataPoint, DataSource, Sport, Workout, WorkoutSummary, WorkoutType};
 use crate::power::PowerAnalyzer;
 use crate::recovery::{BodyBatteryData, HrvMeasurement, PhysiologicalMetrics, SleepSession, SleepStage, SleepStageSegment};
@@ -118,6 +123,15 @@ pub struct FitImporter {
 
     /// Whether to disable device quirk fixes
     disable_quirks: bool,
+
+    /// Configurable data validator
+    validator: Option<Arc<DataValidator>>,
+
+    /// Enable validation during import
+    validation_enabled: bool,
+
+    /// Stop import on validation errors (strict mode)
+    strict_mode: bool,
 }
 
 impl FitImporter {
@@ -148,6 +162,9 @@ impl FitImporter {
             registry: Arc::new(registry),
             quirk_registry: Arc::new(QuirkRegistry::with_defaults()),
             disable_quirks: false,
+            validator: None,
+            validation_enabled: true,
+            strict_mode: false,
         }
     }
 
@@ -176,6 +193,9 @@ impl FitImporter {
             registry: Arc::new(registry),
             quirk_registry: Arc::new(QuirkRegistry::with_defaults()),
             disable_quirks: false,
+            validator: None,
+            validation_enabled: true,
+            strict_mode: false,
         }
     }
 
@@ -188,6 +208,24 @@ impl FitImporter {
     /// Create FIT importer with custom quirk registry
     pub fn with_quirk_registry(mut self, quirk_registry: QuirkRegistry) -> Self {
         self.quirk_registry = Arc::new(quirk_registry);
+        self
+    }
+
+    /// Create FIT importer with custom data validator
+    pub fn with_validator(mut self, validator: DataValidator) -> Self {
+        self.validator = Some(Arc::new(validator));
+        self
+    }
+
+    /// Enable or disable validation during import
+    pub fn with_validation_enabled(mut self, enabled: bool) -> Self {
+        self.validation_enabled = enabled;
+        self
+    }
+
+    /// Enable strict mode (stop import on validation errors)
+    pub fn with_strict_mode(mut self, strict: bool) -> Self {
+        self.strict_mode = strict;
         self
     }
 
@@ -2010,8 +2048,51 @@ impl ImportFormat for FitImporter {
         }
 
         // Validate the workout
-        WorkoutValidator::validate_workout(&mut workout)
-            .with_context(|| "Workout validation failed")?;
+        if self.validation_enabled {
+            // Use configurable validator if available, otherwise use legacy validator
+            if let Some(validator) = &self.validator {
+                let report = validator.validate_workout(&workout);
+
+                // Append validation report to notes
+                if report.has_issues() {
+                    let mut validation_notes = Vec::new();
+
+                    if !report.errors.is_empty() {
+                        validation_notes.push(format!("{} error(s)", report.errors.len()));
+                    }
+                    if !report.warnings.is_empty() {
+                        validation_notes.push(format!("{} warning(s)", report.warnings.len()));
+                    }
+                    if !report.info.is_empty() {
+                        validation_notes.push(format!("{} info message(s)", report.info.len()));
+                    }
+
+                    let current_notes = workout.notes.unwrap_or_default();
+                    workout.notes = Some(format!(
+                        "{}\nValidation: {}",
+                        current_notes,
+                        validation_notes.join(", ")
+                    ));
+                }
+
+                // In strict mode, fail on errors
+                if self.strict_mode && !report.errors.is_empty() {
+                    anyhow::bail!(
+                        "Validation failed with {} errors:\n{}",
+                        report.errors.len(),
+                        report.errors.iter()
+                            .take(5)
+                            .map(|e| format!("  - {}", e.message()))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    );
+                }
+            } else {
+                // Fall back to legacy validation
+                WorkoutValidator::validate_workout(&mut workout)
+                    .with_context(|| "Workout validation failed")?;
+            }
+        }
 
         Ok(vec![workout])
     }

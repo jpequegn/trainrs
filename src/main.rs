@@ -417,6 +417,12 @@ enum Commands {
         #[command(subcommand)]
         command: DeviceCommands,
     },
+
+    /// Validation rule management
+    Validation {
+        #[command(subcommand)]
+        command: ValidationCommands,
+    },
 }
 
 /// Device quirks and information subcommands
@@ -449,6 +455,46 @@ enum DeviceCommands {
         /// Output TOML file path
         #[arg(short, long)]
         output: PathBuf,
+    },
+}
+
+/// Validation rule management subcommands
+#[derive(Subcommand)]
+enum ValidationCommands {
+    /// List current validation rules
+    List {
+        /// Filter by sport
+        #[arg(long)]
+        sport: Option<String>,
+    },
+
+    /// Export validation rules to TOML file
+    Export {
+        /// Output TOML file path
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+
+    /// Import validation rules from TOML file
+    Import {
+        /// Input TOML file path
+        #[arg(short, long)]
+        file: PathBuf,
+    },
+
+    /// Validate a workout file without importing
+    Check {
+        /// Workout file path
+        #[arg(short, long)]
+        file: PathBuf,
+
+        /// Use strict mode (fail on errors)
+        #[arg(long)]
+        strict: bool,
+
+        /// Show detailed validation report
+        #[arg(long)]
+        verbose: bool,
     },
 }
 
@@ -1700,6 +1746,13 @@ fn main() -> Result<()> {
         Commands::Device { command } => {
             handle_device_commands(command).unwrap_or_else(|e| {
                 eprintln!("{}", format!("Device command error: {}", e).red());
+                std::process::exit(1);
+            });
+        }
+
+        Commands::Validation { command } => {
+            handle_validation_commands(command).unwrap_or_else(|e| {
+                eprintln!("{}", format!("Validation command error: {}", e).red());
                 std::process::exit(1);
             });
         }
@@ -5633,6 +5686,183 @@ fn handle_device_export(output: PathBuf) -> Result<()> {
     println!("Products:     {}", registry.products.len().to_string().cyan());
     println!();
     println!("{}", "You can edit this file and reload it using the import functionality.".dimmed());
+
+    Ok(())
+}
+
+/// Handle validation rule commands
+fn handle_validation_commands(command: ValidationCommands) -> Result<()> {
+    use colored::Colorize;
+
+    println!("{}", "✓ Validation Rule Management".cyan().bold());
+    println!("============================\n");
+
+    match command {
+        ValidationCommands::List { sport } => handle_validation_list(sport),
+        ValidationCommands::Export { output } => handle_validation_export(output),
+        ValidationCommands::Import { file } => handle_validation_import(file),
+        ValidationCommands::Check { file, strict, verbose } => {
+            handle_validation_check(file, strict, verbose)
+        }
+    }
+}
+
+/// List validation rules
+fn handle_validation_list(sport: Option<String>) -> Result<()> {
+    use crate::import::validation_rules::{DataValidator, Severity};
+    use crate::models::Sport;
+    use colored::Colorize;
+
+    let validator = DataValidator::with_defaults();
+
+    println!("{}", "VALIDATION RULES".green().bold());
+    println!("═══════════════════════════════════════\n");
+
+    // Filter by sport if specified
+    let sport_filter = sport.as_ref().and_then(|s| {
+        match s.to_lowercase().as_str() {
+            "cycling" => Some(Sport::Cycling),
+            "running" => Some(Sport::Running),
+            "swimming" => Some(Sport::Swimming),
+            _ => None,
+        }
+    });
+
+    let mut total_rules = 0;
+    for (sport_type, rules) in validator.rules() {
+        // Skip if sport filter doesn't match
+        if let Some(filter) = &sport_filter {
+            if sport_type != filter {
+                continue;
+            }
+        }
+
+        println!("{}", format!("═══ {} ═══", format!("{:?}", sport_type).to_uppercase()).cyan().bold());
+        println!();
+
+        for rule in rules {
+            total_rules += 1;
+
+            let severity_icon = match rule.severity {
+                Severity::Error => "🚫".to_string(),
+                Severity::Warning => "⚠️ ".to_string(),
+                Severity::Info => "ℹ️ ".to_string(),
+            };
+
+            println!("{} {}", severity_icon, rule.name.yellow().bold());
+            println!("  Field:    {:?}", rule.field);
+
+            if let Some(min) = rule.min {
+                println!("  Min:      {}", min);
+            }
+            if let Some(max) = rule.max {
+                println!("  Max:      {}", max);
+            }
+
+            println!("  Severity: {:?}", rule.severity);
+            println!("  Action:   {:?}", rule.action);
+            println!();
+        }
+    }
+
+    if total_rules == 0 {
+        println!("{}", "No validation rules found.".dimmed());
+    } else {
+        println!("─────────────────────────────────");
+        println!("Total rules: {}", total_rules.to_string().cyan().bold());
+    }
+
+    Ok(())
+}
+
+/// Export validation rules to file
+fn handle_validation_export(output: PathBuf) -> Result<()> {
+    use anyhow::Context;
+    use crate::import::validation_rules::DataValidator;
+    use colored::Colorize;
+
+    let validator = DataValidator::with_defaults();
+
+    validator.save_to_file(&output)
+        .with_context(|| format!("Failed to export validation rules to {}", output.display()))?;
+
+    println!("{}", "✅ Validation rules exported successfully".green().bold());
+    println!("File:  {}", output.display().to_string().cyan());
+    println!();
+    println!("{}", "You can edit this file to customize validation rules.".dimmed());
+
+    Ok(())
+}
+
+/// Import validation rules from file
+fn handle_validation_import(file: PathBuf) -> Result<()> {
+    use anyhow::Context;
+    use crate::import::validation_rules::DataValidator;
+    use colored::Colorize;
+
+    let validator = DataValidator::load_from_file(&file)
+        .with_context(|| format!("Failed to load validation rules from {}", file.display()))?;
+
+    let mut total_rules = 0;
+    for rules in validator.rules().values() {
+        total_rules += rules.len();
+    }
+
+    println!("{}", "✅ Validation rules loaded successfully".green().bold());
+    println!("File:  {}", file.display().to_string().cyan());
+    println!("Rules: {}", total_rules.to_string().cyan());
+    println!();
+    println!("{}", "These rules are now available for validation.".dimmed());
+
+    Ok(())
+}
+
+/// Check a workout file with validation rules
+fn handle_validation_check(file: PathBuf, strict: bool, verbose: bool) -> Result<()> {
+    use anyhow::Context;
+    use crate::import::fit::FitImporter;
+    use crate::import::validation_rules::DataValidator;
+    use crate::import::ImportFormat;
+    use colored::Colorize;
+
+    println!("{}", format!("📋 Validating: {}", file.display()).bold());
+    println!();
+
+    // Create validator and importer
+    let validator = DataValidator::with_defaults();
+    let importer = FitImporter::new()
+        .with_validator(validator)
+        .with_validation_enabled(true)
+        .with_strict_mode(strict);
+
+    // Import and validate
+    let workouts = importer.import_file(&file)
+        .with_context(|| format!("Failed to validate file: {}", file.display()))?;
+
+    println!("{}", "✅ Validation completed".green().bold());
+    println!("Workouts: {}", workouts.len().to_string().cyan());
+
+    if verbose {
+        for (idx, workout) in workouts.iter().enumerate() {
+            println!();
+            println!("{}", format!("Workout #{}", idx + 1).cyan().bold());
+            println!("─────────────────────────────────");
+            println!("Sport:    {:?}", workout.sport);
+            println!("Duration: {}s", workout.duration_seconds);
+
+            if let Some(notes) = &workout.notes {
+                if notes.contains("Validation:") {
+                    println!();
+                    println!("{}", "Validation Notes:".yellow().bold());
+                    for line in notes.lines() {
+                        if line.contains("Validation:") || line.contains("error") || line.contains("warning") {
+                            println!("  {}", line);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     Ok(())
 }
