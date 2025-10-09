@@ -10,6 +10,7 @@ pub mod gpx;
 pub mod streaming;
 pub mod tcx;
 pub mod validation;
+pub mod validation_rules;
 
 /// Trait for importing workout data from different file formats
 pub trait ImportFormat {

@@ -145,6 +145,31 @@ pub struct ImportSettings {
 
     /// Default timezone for workout data without timezone
     pub default_timezone: String,
+
+    /// Data validation settings
+    pub validation: ValidationSettings,
+}
+
+/// Data validation configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidationSettings {
+    /// Enable validation during import
+    pub enabled: bool,
+
+    /// Path to custom validation rules file (TOML)
+    pub custom_rules_path: Option<PathBuf>,
+
+    /// Stop import on validation errors
+    pub strict_mode: bool,
+
+    /// Log validation warnings
+    pub log_warnings: bool,
+
+    /// Log validation info messages
+    pub log_info: bool,
+
+    /// Use sport-specific validation rules
+    pub use_sport_specific_rules: bool,
 }
 
 /// Athlete-specific configuration
@@ -431,6 +456,20 @@ impl Default for ImportSettings {
             chunk_size: 100,
             skip_duplicate_detection: false,
             default_timezone: "UTC".to_string(),
+            validation: ValidationSettings::default(),
+        }
+    }
+}
+
+impl Default for ValidationSettings {
+    fn default() -> Self {
+        ValidationSettings {
+            enabled: true,
+            custom_rules_path: None,
+            strict_mode: false,
+            log_warnings: true,
+            log_info: false,
+            use_sport_specific_rules: true,
         }
     }
 }
