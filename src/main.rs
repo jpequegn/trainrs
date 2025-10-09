@@ -10,21 +10,23 @@ use crate::models::DataPoint;
 mod config;
 mod database;
 mod data_management;
+mod device_quirks;
+mod error;
 mod export;
 mod import;
+mod logging;
 mod models;
 mod multisport;
 mod performance;
 mod pmc;
 mod power;
+mod recovery;
 mod running;
+mod training_effect;
 mod training_plan;
 mod tss;
-mod zones;
-mod error;
-mod logging;
-mod training_effect;
 mod vo2max;
+mod zones;
 
 // Test utilities have been integrated into individual test files
 

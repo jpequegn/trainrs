@@ -6,6 +6,7 @@ use std::fs::File;
 use std::path::Path;
 use uuid::Uuid;
 
+use crate::device_quirks::{DeviceInfo, QuirkRegistry};
 use crate::import::{developer_registry::DeveloperFieldRegistry, validation::WorkoutValidator, ImportFormat};
 use crate::models::{DataPoint, DataSource, Sport, Workout, WorkoutSummary, WorkoutType};
 use crate::power::PowerAnalyzer;
@@ -111,6 +112,12 @@ use std::sync::Arc;
 pub struct FitImporter {
     /// Registry of known developer field UUIDs for automatic field detection
     registry: Arc<DeveloperFieldRegistry>,
+
+    /// Registry of known device quirks
+    quirk_registry: Arc<QuirkRegistry>,
+
+    /// Whether to disable device quirk fixes
+    disable_quirks: bool,
 }
 
 impl FitImporter {
@@ -139,6 +146,8 @@ impl FitImporter {
 
         Self {
             registry: Arc::new(registry),
+            quirk_registry: Arc::new(QuirkRegistry::with_defaults()),
+            disable_quirks: false,
         }
     }
 
@@ -165,7 +174,21 @@ impl FitImporter {
     pub fn with_registry(registry: DeveloperFieldRegistry) -> Self {
         Self {
             registry: Arc::new(registry),
+            quirk_registry: Arc::new(QuirkRegistry::with_defaults()),
+            disable_quirks: false,
         }
+    }
+
+    /// Create FIT importer with quirks disabled
+    pub fn with_quirks_disabled(mut self) -> Self {
+        self.disable_quirks = true;
+        self
+    }
+
+    /// Create FIT importer with custom quirk registry
+    pub fn with_quirk_registry(mut self, quirk_registry: QuirkRegistry) -> Self {
+        self.quirk_registry = Arc::new(quirk_registry);
+        self
     }
 
     /// Returns a reference to the developer field registry used by this importer.
@@ -189,6 +212,10 @@ impl FitImporter {
         &self.registry
     }
 
+    /// Get reference to the quirk registry
+    pub fn quirk_registry(&self) -> &QuirkRegistry {
+        &self.quirk_registry
+    }
     /// Parse HRV (Heart Rate Variability) data from FIT file monitoring messages
     ///
     /// Extracts HRV metrics from MonitoringInfo and StressLevel messages in FIT files.
@@ -939,6 +966,71 @@ impl FitImporter {
 
         // Fallback if no session record found
         Ok((Sport::Cycling, WorkoutType::Endurance, Utc::now(), 0))
+    }
+
+    /// Extract device information from FIT file
+    fn extract_device_info(&self, records: &[FitDataRecord]) -> Option<DeviceInfo> {
+        for record in records {
+            if record.kind() == fitparser::profile::MesgNum::FileId {
+                let mut manufacturer_id: Option<u16> = None;
+                let mut product_id: Option<u16> = None;
+                let mut firmware_version: Option<u16> = None;
+
+                for field in record.fields() {
+                    match field.name() {
+                        "manufacturer" => {
+                            if let Value::UInt16(id) = field.value() {
+                                manufacturer_id = Some(*id);
+                            }
+                        }
+                        "product" => {
+                            if let Value::UInt16(id) = field.value() {
+                                product_id = Some(*id);
+                            }
+                        }
+                        "product_name" => {
+                            // Product name is in the file, we can use it later
+                        }
+                        "time_created" => {
+                            // Could use for additional context
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Try to extract firmware version from device_info records
+                if manufacturer_id.is_some() && product_id.is_some() {
+                    // Look for firmware version in device_info records
+                    for dev_record in records {
+                        if dev_record.kind() == fitparser::profile::MesgNum::DeviceInfo {
+                            for dev_field in dev_record.fields() {
+                                if dev_field.name() == "software_version" {
+                                    if let Value::UInt16(ver) = dev_field.value() {
+                                        firmware_version = Some(*ver);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    let mut device = DeviceInfo::new(manufacturer_id.unwrap(), product_id.unwrap());
+                    if let Some(fw) = firmware_version {
+                        device = device.with_firmware(fw);
+                    }
+
+                    // Enrich with names from quirk registry
+                    if let Some(manufacturer_name) = self.quirk_registry.get_manufacturer_name(device.manufacturer_id) {
+                        let product_name = self.quirk_registry.get_product_name(device.manufacturer_id, device.product_id)
+                            .unwrap_or("Unknown Product");
+                        device = device.with_names(manufacturer_name.to_string(), product_name.to_string());
+                    }
+
+                    return Some(device);
+                }
+            }
+        }
+
+        None
     }
 
     /// Parse data points from FIT records with sport-specific metrics
@@ -1866,6 +1958,9 @@ impl ImportFormat for FitImporter {
             anyhow::bail!("FIT file contains no data records");
         }
 
+        // Extract device information
+        let device_info = self.extract_device_info(&records);
+
         // Parse session information
         let (sport, workout_type, start_time, duration) = self.parse_session_info(&records)
             .with_context(|| "Failed to parse session information from FIT file")?;
@@ -1885,7 +1980,7 @@ impl ImportFormat for FitImporter {
         let data_source = self.determine_data_source(&data_points, &sport);
 
         // Create workout object
-        let workout = Workout {
+        let mut workout = Workout {
             id: Uuid::new_v4().to_string(),
             date: start_time.date_naive(),
             sport,
@@ -1899,8 +1994,22 @@ impl ImportFormat for FitImporter {
             source: Some(file_path.to_string_lossy().to_string()),
         };
 
+        // Apply device quirks if device info was extracted
+        if let Some(device) = device_info {
+            match self.quirk_registry.apply_quirks(&mut workout, &device, self.disable_quirks) {
+                Ok(messages) => {
+                    // Append quirk messages to workout notes
+                    let quirk_notes = messages.join("; ");
+                    let current_notes = workout.notes.unwrap_or_default();
+                    workout.notes = Some(format!("{}\nDevice Quirks: {}", current_notes, quirk_notes));
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to apply device quirks: {}", e);
+                }
+            }
+        }
+
         // Validate the workout
-        let mut workout = workout;
         WorkoutValidator::validate_workout(&mut workout)
             .with_context(|| "Workout validation failed")?;
 

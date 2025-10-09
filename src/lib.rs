@@ -4,6 +4,7 @@
 pub mod config;
 pub mod database;
 pub mod data_management;
+pub mod device_quirks;
 pub mod error;
 pub mod export;
 pub mod import;
