@@ -56,14 +56,10 @@ jobs:
           name: Rust Benchmark
           tool: 'cargo'
           output-file-path: benchmark_results.txt
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: false
           save-data-file: true
           # Alert on 5% performance regression
           alert-threshold: '105%'
-          comment-on-alert: true
           fail-on-alert: false
-          alert-comment-cc-users: '@jpequegn'
 
       - name: Upload benchmark data
         if: github.event_name != 'pull_request'
@@ -79,11 +75,8 @@ jobs:
           name: Rust Benchmark (PR)
           tool: 'cargo'
           output-file-path: benchmark_results.txt
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: false
           # Alert on 5% performance regression
           alert-threshold: '105%'
-          comment-on-alert: true
           fail-on-alert: true
 
       - name: Upload benchmark results
