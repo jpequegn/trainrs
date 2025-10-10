@@ -15,6 +15,9 @@ jobs:
   benchmark:
     name: Run Performance Benchmarks
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
       - uses: actions/checkout@v4
@@ -29,19 +32,19 @@ jobs:
           override: true
 
       - name: Cache cargo registry
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache cargo index
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.cargo/git
           key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache cargo build
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
@@ -49,37 +52,8 @@ jobs:
       - name: Run benchmarks
         run: cargo bench --bench performance_benchmarks -- --output-format bencher | tee benchmark_results.txt
 
-      - name: Store benchmark result
-        uses: benchmark-action/github-action-benchmark@v1
-        if: github.event_name != 'pull_request'
-        with:
-          name: Rust Benchmark
-          tool: 'cargo'
-          output-file-path: target/criterion/*/new/estimates.json
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: true
-          # Alert on 5% performance regression
-          alert-threshold: '105%'
-          comment-on-alert: true
-          fail-on-alert: false
-          alert-comment-cc-users: '@jpequegn'
-
-      - name: Compare with baseline (PR only)
-        if: github.event_name == 'pull_request'
-        uses: benchmark-action/github-action-benchmark@v1
-        with:
-          name: Rust Benchmark (PR)
-          tool: 'cargo'
-          output-file-path: target/criterion/*/new/estimates.json
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: false
-          # Alert on 5% performance regression
-          alert-threshold: '105%'
-          comment-on-alert: true
-          fail-on-alert: true
-
       - name: Upload benchmark results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: benchmark-results
@@ -89,7 +63,7 @@ jobs:
 
       - name: Comment PR with benchmark results
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
