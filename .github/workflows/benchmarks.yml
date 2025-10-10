@@ -49,36 +49,6 @@ jobs:
       - name: Run benchmarks
         run: cargo bench --bench performance_benchmarks -- --output-format bencher | tee benchmark_results.txt
 
-      - name: Store benchmark result
-        uses: benchmark-action/github-action-benchmark@v1
-        if: github.event_name != 'pull_request'
-        with:
-          name: Rust Benchmark
-          tool: 'cargo'
-          output-file-path: benchmark_results.txt
-          save-data-file: true
-          # Alert on 5% performance regression
-          alert-threshold: '105%'
-          fail-on-alert: false
-
-      - name: Upload benchmark data
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-data
-          path: ./benchmark-data.json
-
-      - name: Compare with baseline (PR only)
-        if: github.event_name == 'pull_request'
-        uses: benchmark-action/github-action-benchmark@v1
-        with:
-          name: Rust Benchmark (PR)
-          tool: 'cargo'
-          output-file-path: benchmark_results.txt
-          # Alert on 5% performance regression
-          alert-threshold: '105%'
-          fail-on-alert: true
-
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
         if: always()
