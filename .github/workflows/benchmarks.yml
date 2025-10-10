@@ -57,12 +57,20 @@ jobs:
           tool: 'cargo'
           output-file-path: benchmark_results.txt
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: true
+          auto-push: false
+          save-data-file: true
           # Alert on 5% performance regression
           alert-threshold: '105%'
           comment-on-alert: true
           fail-on-alert: false
           alert-comment-cc-users: '@jpequegn'
+
+      - name: Upload benchmark data
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-data
+          path: ./benchmark-data.json
 
       - name: Compare with baseline (PR only)
         if: github.event_name == 'pull_request'
