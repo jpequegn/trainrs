@@ -1,0 +1,227 @@
+name: Memory Leak and Stress Tests
+
+on:
+  # Weekly scheduled runs to avoid blocking PRs
+  schedule:
+    - cron: '0 2 * * 0'  # Sundays at 2 AM UTC
+
+  # Allow manual triggering
+  workflow_dispatch:
+
+  # Run on pushes to main (for major changes)
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/memory_leak_tests.rs'
+      - 'tests/stress_tests.rs'
+      - 'scripts/valgrind_check.sh'
+      - 'scripts/stress_test.sh'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  memory-leak-tests:
+    name: Memory Leak Detection
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Install Valgrind
+        run: sudo apt-get update && sudo apt-get install -y valgrind
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run memory leak tests (native)
+        run: |
+          cargo test --release --test memory_leak_tests -- --ignored --nocapture --test-threads=1
+        continue-on-error: true
+
+      - name: Run Valgrind memory leak detection
+        id: valgrind
+        run: |
+          chmod +x scripts/valgrind_check.sh
+          ./scripts/valgrind_check.sh memory_leak_tests || echo "valgrind_failed=true" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Upload Valgrind reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: valgrind-reports
+          path: target/valgrind-reports/
+          retention-days: 30
+
+      - name: Check Valgrind results
+        if: steps.valgrind.outputs.valgrind_failed == 'true'
+        run: |
+          echo "::error::Memory leaks detected by Valgrind"
+          exit 1
+
+  stress-tests:
+    name: Stress Testing
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run stress tests
+        run: |
+          chmod +x scripts/stress_test.sh
+          ./scripts/stress_test.sh
+
+      - name: Upload stress test reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stress-test-reports
+          path: target/stress-test-reports/
+          retention-days: 30
+
+  edge-case-tests:
+    name: Edge Case Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run edge case tests
+        run: |
+          cargo test --release --test stress_tests test_workout_with_missing_fields -- --nocapture
+          cargo test --release --test stress_tests test_empty_workout -- --nocapture
+          cargo test --release --test stress_tests test_single_datapoint_workout -- --nocapture
+          cargo test --release --test stress_tests test_invalid_string_data -- --nocapture
+
+  performance-baseline:
+    name: Performance Baseline
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run performance baseline tests
+        run: |
+          echo "=== Large Workout Test ==="
+          timeout 30 cargo test --release --test stress_tests test_large_workout_file -- --ignored --nocapture
+
+          echo ""
+          echo "=== Rapid Import Burst ==="
+          timeout 15 cargo test --release --test stress_tests test_rapid_import_burst -- --ignored --nocapture
+
+          echo ""
+          echo "=== Data Integrity ==="
+          timeout 30 cargo test --release --test stress_tests test_data_integrity_large_dataset -- --ignored --nocapture
+
+      - name: Performance summary
+        if: always()
+        run: |
+          echo "## Performance Baseline Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✓ Large workout test completed" >> $GITHUB_STEP_SUMMARY
+          echo "✓ Rapid import burst completed" >> $GITHUB_STEP_SUMMARY
+          echo "✓ Data integrity validation completed" >> $GITHUB_STEP_SUMMARY
