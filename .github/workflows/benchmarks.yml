@@ -55,7 +55,7 @@ jobs:
         with:
           name: Rust Benchmark
           tool: 'cargo'
-          output-file-path: target/criterion/*/new/estimates.json
+          output-file-path: benchmark_results.txt
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
           # Alert on 5% performance regression
@@ -70,7 +70,7 @@ jobs:
         with:
           name: Rust Benchmark (PR)
           tool: 'cargo'
-          output-file-path: target/criterion/*/new/estimates.json
+          output-file-path: benchmark_results.txt
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: false
           # Alert on 5% performance regression
