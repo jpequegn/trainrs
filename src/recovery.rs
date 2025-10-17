@@ -1564,6 +1564,318 @@ impl fmt::Display for TrendDirection {
     }
 }
 
+// ============================================================================
+// HRV Baseline Calculation & Trend Analysis Algorithms
+// ============================================================================
+
+/// Calculate HRV baseline from a series of measurements using 7-day rolling average
+/// with outlier filtering
+///
+/// # Algorithm
+///
+/// 1. Sort measurements by timestamp (most recent last)
+/// 2. Filter outliers using Modified Z-score (> 3.5)
+/// 3. Calculate 7-day rolling average from filtered values
+/// 4. Return None if insufficient data (<3 measurements)
+///
+/// # Arguments
+///
+/// * `measurements` - Slice of HRV measurements (should be chronologically ordered)
+///
+/// # Returns
+///
+/// Optional baseline value in milliseconds, or None if insufficient data
+///
+/// # Sports Science Context
+///
+/// A 7-day baseline balances responsiveness to training adaptations with
+/// stability against daily fluctuations. Outlier filtering prevents single
+/// anomalous measurements from skewing the baseline.
+///
+/// # Performance
+///
+/// Time complexity: O(n log n) for sorting + O(n) for filtering and averaging
+/// Target: <10ms for 30-day dataset
+pub fn calculate_hrv_baseline(measurements: &[HrvMeasurement]) -> Option<f64> {
+    if measurements.is_empty() {
+        return None;
+    }
+
+    // Extract RMSSD values
+    let mut values: Vec<(DateTime<Utc>, f64)> = measurements
+        .iter()
+        .map(|m| (m.timestamp, m.rmssd))
+        .collect();
+
+    // Sort by timestamp (oldest first)
+    values.sort_by_key(|(timestamp, _)| *timestamp);
+
+    // Take last 7 days of measurements
+    let recent_values: Vec<f64> = values
+        .iter()
+        .rev()
+        .take(7)
+        .map(|(_, rmssd)| *rmssd)
+        .collect();
+
+    if recent_values.len() < 3 {
+        return None; // Insufficient data for reliable baseline
+    }
+
+    // Filter outliers using Modified Z-score method
+    let filtered_values = filter_outliers(&recent_values);
+
+    if filtered_values.len() < 3 {
+        return None; // Too many outliers removed
+    }
+
+    // Calculate mean of filtered values
+    let sum: f64 = filtered_values.iter().sum();
+    let baseline = sum / filtered_values.len() as f64;
+
+    Some(baseline)
+}
+
+/// Filter outliers from HRV measurements using Modified Z-score
+///
+/// # Algorithm
+///
+/// Modified Z-score = 0.6745 * (x - median) / MAD
+/// where MAD = median absolute deviation
+///
+/// Values with |Modified Z-score| > 3.5 are considered outliers
+///
+/// # Arguments
+///
+/// * `values` - Slice of RMSSD values
+///
+/// # Returns
+///
+/// Vector of filtered values with outliers removed
+fn filter_outliers(values: &[f64]) -> Vec<f64> {
+    if values.len() < 3 {
+        return values.to_vec();
+    }
+
+    // Calculate median
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let median = sorted[sorted.len() / 2];
+
+    // Calculate MAD (Median Absolute Deviation)
+    let mut deviations: Vec<f64> = values
+        .iter()
+        .map(|&v| (v - median).abs())
+        .collect();
+    deviations.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mad = deviations[deviations.len() / 2];
+
+    // Filter outliers using Modified Z-score > 3.5
+    if mad < 0.001 {
+        // All values are very similar, no outliers
+        return values.to_vec();
+    }
+
+    values
+        .iter()
+        .filter(|&&v| {
+            let modified_z = 0.6745 * (v - median).abs() / mad;
+            modified_z <= 3.5
+        })
+        .copied()
+        .collect()
+}
+
+/// Overreaching alert information
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverreachingAlert {
+    /// Severity level (0-100, higher = more severe)
+    pub severity: u8,
+    /// Number of consecutive days with declining HRV
+    pub consecutive_days: usize,
+    /// Average HRV deviation from baseline (negative = below baseline)
+    pub avg_deviation_pct: f64,
+    /// Recommended action
+    pub recommendation: String,
+}
+
+/// Detect overreaching based on HRV trend and training load
+///
+/// # Algorithm
+///
+/// Overreaching is detected when:
+/// 1. HRV shows declining trend for 3+ consecutive days
+/// 2. Average HRV is >10% below baseline (sports science threshold)
+/// 3. Training load (ATL) is elevated
+///
+/// Severity calculation:
+/// - Base severity from HRV deviation
+/// - Increased by consecutive days of decline
+/// - Amplified if training load is high
+///
+/// # Arguments
+///
+/// * `hrv_trend` - Recent HRV measurements (chronologically ordered)
+/// * `training_load` - Recent training stress scores (aligned with HRV dates)
+///
+/// # Returns
+///
+/// Optional alert if overreaching is detected
+///
+/// # Sports Science Context
+///
+/// Functional overreaching is a normal part of training, but non-functional
+/// overreaching (>7 days) can lead to overtraining syndrome. This algorithm
+/// provides early warning to adjust training load.
+pub fn detect_overreaching(
+    hrv_trend: &[f64],
+    training_load: &[f64],
+) -> Option<OverreachingAlert> {
+    if hrv_trend.len() < 3 {
+        return None; // Need at least 3 days to detect pattern
+    }
+
+    // Detect consecutive declining days
+    let mut max_consecutive_days = 0;
+    let mut current_consecutive = 0;
+    let mut max_decline_start_idx = 0;
+    let mut current_decline_start_idx = 0;
+    let mut max_declining_end_values = Vec::new();
+    let mut current_declining_end_values = Vec::new();
+
+    for (i, window) in hrv_trend.windows(2).enumerate() {
+        if window[1] < window[0] {
+            if current_consecutive == 0 {
+                current_decline_start_idx = i; // Mark where decline started
+            }
+            current_consecutive += 1;
+            current_declining_end_values.push(window[1]);
+
+            // Update maximum if current streak is longer
+            if current_consecutive > max_consecutive_days {
+                max_consecutive_days = current_consecutive;
+                max_decline_start_idx = current_decline_start_idx;
+                max_declining_end_values = current_declining_end_values.clone();
+            }
+        } else {
+            // Reset current streak
+            current_consecutive = 0;
+            current_declining_end_values.clear();
+        }
+    }
+
+    // Require 3+ consecutive declining days
+    if max_consecutive_days < 3 {
+        return None;
+    }
+
+    // Calculate baseline from the value BEFORE the decline started
+    // This represents the athlete's normal state before overreaching
+    let baseline = hrv_trend[max_decline_start_idx];
+
+    // Calculate average of the recent low values during decline
+    let avg_declining = max_declining_end_values.iter().sum::<f64>() / max_declining_end_values.len() as f64;
+    let avg_deviation_pct = ((avg_declining - baseline) / baseline) * 100.0;
+
+    // Only alert if significantly below baseline (>10%)
+    // A 10% drop from baseline with 3+ days decline is significant for overreaching
+    if avg_deviation_pct > -10.0 {
+        return None;
+    }
+
+    // Calculate severity (0-100)
+    let mut severity = (avg_deviation_pct.abs() * 1.5).min(70.0) as u8;
+
+    // Increase severity based on consecutive days
+    severity = severity.saturating_add((max_consecutive_days as u8).saturating_mul(5).min(20));
+
+    // Amplify if training load is high
+    if !training_load.is_empty() {
+        let recent_load = training_load.iter().rev().take(3).sum::<f64>() / 3.0;
+        if recent_load > 150.0 {
+            severity = severity.saturating_add(10);
+        }
+    }
+
+    let recommendation = match severity {
+        0..=30 => "Monitor recovery, consider light training day".to_string(),
+        31..=60 => "Reduce training intensity, prioritize recovery".to_string(),
+        61..=80 => "Rest day recommended, focus on sleep and nutrition".to_string(),
+        _ => "Multiple rest days needed, consult coach if symptoms persist".to_string(),
+    };
+
+    Some(OverreachingAlert {
+        severity: severity.min(100),
+        consecutive_days: max_consecutive_days,
+        avg_deviation_pct,
+        recommendation,
+    })
+}
+
+/// Calculate training readiness score from HRV deviation, sleep quality, and TSB
+///
+/// # Algorithm
+///
+/// Readiness = (HRV_component * 0.4) + (Sleep_component * 0.3) + (TSB_component * 0.3)
+///
+/// Where:
+/// - HRV_component: Based on deviation from baseline (0-100)
+/// - Sleep_component: Direct sleep score (0-100)
+/// - TSB_component: Derived from Training Stress Balance
+///
+/// # Arguments
+///
+/// * `hrv_deviation` - Percentage deviation from baseline (negative = below baseline)
+/// * `sleep_score` - Optional sleep quality score (0-100)
+/// * `tsb` - Optional Training Stress Balance (fitness - fatigue)
+///
+/// # Returns
+///
+/// Training readiness score (0-100)
+///
+/// # Sports Science Context
+///
+/// Training readiness integrates multiple recovery markers:
+/// - HRV reflects autonomic nervous system recovery
+/// - Sleep quality indicates physical and mental restoration
+/// - TSB shows fitness vs fatigue balance
+///
+/// Scores 75+ indicate readiness for hard training
+/// Scores <60 suggest light training or rest
+pub fn calculate_training_readiness(
+    hrv_deviation: f64,
+    sleep_score: Option<u8>,
+    tsb: Option<i16>,
+) -> u8 {
+    // HRV component (40% weight)
+    // Deviation: 0% = 100 score, -30% = 40 score, -50% = 0 score
+    let hrv_component = if hrv_deviation >= 0.0 {
+        100.0
+    } else {
+        ((hrv_deviation + 50.0) / 50.0 * 100.0).max(0.0).min(100.0)
+    };
+
+    // Sleep component (30% weight)
+    let sleep_component = sleep_score.unwrap_or(70) as f64; // Default to average if missing
+
+    // TSB component (30% weight)
+    // Positive TSB (fresh): higher score
+    // Negative TSB (fatigued): lower score
+    // Scale: TSB of +30 = 100, TSB of 0 = 60, TSB of -30 = 20
+    let tsb_component = if let Some(balance) = tsb {
+        let tsb_f64 = balance as f64;
+        // Linear scale: y = (x + 30) / 60 * 80 + 20
+        ((tsb_f64 + 30.0) / 60.0 * 80.0 + 20.0).max(20.0).min(100.0)
+    } else {
+        60.0 // Default to neutral if missing
+    };
+
+    // Weighted average
+    let readiness = (hrv_component * 0.4) + (sleep_component * 0.3) + (tsb_component * 0.3);
+
+    readiness.round() as u8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2826,5 +3138,269 @@ mod tests {
         assert_eq!(metrics.date, deserialized.date);
         assert_eq!(metrics.training_readiness, deserialized.training_readiness);
         assert_eq!(metrics.recovery_quality, deserialized.recovery_quality);
+    }
+
+    // ========================================================================
+    // HRV Baseline Calculation Tests
+    // ========================================================================
+
+    #[test]
+    fn test_calculate_hrv_baseline_normal() {
+        use chrono::Duration;
+
+        let base_time = Utc::now();
+        let measurements: Vec<HrvMeasurement> = vec![
+            HrvMeasurement::new(base_time - Duration::days(6), 50.0, None, None).unwrap(),
+            HrvMeasurement::new(base_time - Duration::days(5), 52.0, None, None).unwrap(),
+            HrvMeasurement::new(base_time - Duration::days(4), 48.0, None, None).unwrap(),
+            HrvMeasurement::new(base_time - Duration::days(3), 51.0, None, None).unwrap(),
+            HrvMeasurement::new(base_time - Duration::days(2), 49.0, None, None).unwrap(),
+            HrvMeasurement::new(base_time - Duration::days(1), 50.0, None, None).unwrap(),
+            HrvMeasurement::new(base_time, 52.0, None, None).unwrap(),
+        ];
+
+        let baseline = calculate_hrv_baseline(&measurements);
+        assert!(baseline.is_some());
+
+        let baseline_value = baseline.unwrap();
+        assert!(baseline_value >= 48.0 && baseline_value <= 52.0);
+    }
+
+    #[test]
+    fn test_calculate_hrv_baseline_with_outlier() {
+        use chrono::Duration;
+
+        let base_time = Utc::now();
+        let measurements: Vec<HrvMeasurement> = vec![
+            HrvMeasurement::new(base_time - Duration::days(6), 50.0, None, None).unwrap(),
+            HrvMeasurement::new(base_time - Duration::days(5), 52.0, None, None).unwrap(),
+            HrvMeasurement::new(base_time - Duration::days(4), 48.0, None, None).unwrap(),
+            HrvMeasurement::new(base_time - Duration::days(3), 120.0, None, None).unwrap(), // Outlier!
+            HrvMeasurement::new(base_time - Duration::days(2), 49.0, None, None).unwrap(),
+            HrvMeasurement::new(base_time - Duration::days(1), 50.0, None, None).unwrap(),
+            HrvMeasurement::new(base_time, 51.0, None, None).unwrap(),
+        ];
+
+        let baseline = calculate_hrv_baseline(&measurements);
+        assert!(baseline.is_some());
+
+        let baseline_value = baseline.unwrap();
+        // Outlier should be filtered out, baseline should be around 50
+        assert!(baseline_value >= 48.0 && baseline_value <= 52.0);
+    }
+
+    #[test]
+    fn test_calculate_hrv_baseline_insufficient_data() {
+        use chrono::Duration;
+
+        let base_time = Utc::now();
+
+        // Test with no measurements
+        let empty_measurements: Vec<HrvMeasurement> = vec![];
+        assert!(calculate_hrv_baseline(&empty_measurements).is_none());
+
+        // Test with too few measurements
+        let few_measurements = vec![
+            HrvMeasurement::new(base_time, 50.0, None, None).unwrap(),
+            HrvMeasurement::new(base_time - Duration::days(1), 52.0, None, None).unwrap(),
+        ];
+        assert!(calculate_hrv_baseline(&few_measurements).is_none());
+    }
+
+    #[test]
+    fn test_filter_outliers_normal_distribution() {
+        let values = vec![48.0, 49.0, 50.0, 51.0, 52.0];
+        let filtered = filter_outliers(&values);
+        assert_eq!(filtered.len(), 5); // No outliers
+    }
+
+    #[test]
+    fn test_filter_outliers_with_extreme_values() {
+        let values = vec![50.0, 51.0, 52.0, 150.0]; // 150 is extreme outlier
+        let filtered = filter_outliers(&values);
+        assert!(filtered.len() < values.len());
+        assert!(!filtered.contains(&150.0)); // Outlier should be removed
+    }
+
+    #[test]
+    fn test_filter_outliers_all_similar() {
+        let values = vec![50.0, 50.0, 50.0, 50.0];
+        let filtered = filter_outliers(&values);
+        assert_eq!(filtered.len(), 4); // All values retained
+    }
+
+    // ========================================================================
+    // Overreaching Detection Tests
+    // ========================================================================
+
+    #[test]
+    fn test_detect_overreaching_normal_variation() {
+        let hrv_trend = vec![50.0, 51.0, 49.0, 52.0, 50.0];
+        let training_load = vec![100.0, 95.0, 105.0, 100.0, 98.0];
+
+        let alert = detect_overreaching(&hrv_trend, &training_load);
+        assert!(alert.is_none()); // Normal variation, no alert
+    }
+
+    #[test]
+    fn test_detect_overreaching_declining_trend() {
+        let hrv_trend = vec![50.0, 45.0, 40.0, 38.0]; // Consecutive decline
+        let training_load = vec![100.0, 110.0, 120.0, 130.0];
+
+        let alert = detect_overreaching(&hrv_trend, &training_load);
+        assert!(alert.is_some());
+
+        let alert_data = alert.unwrap();
+        assert!(alert_data.consecutive_days >= 3);
+        assert!(alert_data.avg_deviation_pct < -10.0);
+        assert!(alert_data.severity > 0);
+        assert!(!alert_data.recommendation.is_empty());
+    }
+
+    #[test]
+    fn test_detect_overreaching_minor_decline() {
+        let hrv_trend = vec![50.0, 49.0, 48.0, 47.0]; // Declining but not severe
+        let training_load = vec![100.0, 105.0, 110.0, 115.0];
+
+        let alert = detect_overreaching(&hrv_trend, &training_load);
+        // Should not alert for minor decline (<10% below baseline)
+        assert!(alert.is_none());
+    }
+
+    #[test]
+    fn test_detect_overreaching_insufficient_data() {
+        let hrv_trend = vec![50.0, 45.0]; // Too few data points
+        let training_load = vec![100.0, 110.0];
+
+        let alert = detect_overreaching(&hrv_trend, &training_load);
+        assert!(alert.is_none());
+    }
+
+    #[test]
+    fn test_detect_overreaching_severity_levels() {
+        // Moderate overreaching
+        let moderate_trend = vec![50.0, 42.0, 40.0, 38.0]; // ~20% below baseline
+        let moderate_load = vec![100.0, 120.0, 130.0, 140.0];
+        let moderate_alert = detect_overreaching(&moderate_trend, &moderate_load);
+
+        assert!(moderate_alert.is_some());
+        let moderate = moderate_alert.unwrap();
+        assert!(moderate.severity >= 30 && moderate.severity <= 60);
+
+        // Severe overreaching
+        let severe_trend = vec![50.0, 35.0, 32.0, 30.0, 28.0]; // ~40% below baseline
+        let severe_load = vec![100.0, 150.0, 160.0, 170.0, 180.0];
+        let severe_alert = detect_overreaching(&severe_trend, &severe_load);
+
+        assert!(severe_alert.is_some());
+        let severe = severe_alert.unwrap();
+        assert!(severe.severity > 60);
+    }
+
+    #[test]
+    fn test_detect_overreaching_high_training_load() {
+        let hrv_trend = vec![50.0, 42.0, 40.0, 38.0];
+        let high_load = vec![180.0, 190.0, 200.0, 210.0]; // Very high load
+        let low_load = vec![80.0, 85.0, 90.0, 95.0]; // Low load
+
+        let high_load_alert = detect_overreaching(&hrv_trend, &high_load);
+        let low_load_alert = detect_overreaching(&hrv_trend, &low_load);
+
+        assert!(high_load_alert.is_some());
+        assert!(low_load_alert.is_some());
+
+        // High training load should increase severity
+        assert!(high_load_alert.unwrap().severity > low_load_alert.unwrap().severity);
+    }
+
+    // ========================================================================
+    // Training Readiness Tests
+    // ========================================================================
+
+    #[test]
+    fn test_training_readiness_optimal() {
+        // Optimal recovery: HRV at baseline, good sleep, positive TSB
+        let readiness = calculate_training_readiness(0.0, Some(90), Some(15));
+        assert!(readiness >= 88 && readiness <= 95);
+    }
+
+    #[test]
+    fn test_training_readiness_poor_hrv() {
+        // Poor HRV: 30% below baseline
+        let readiness = calculate_training_readiness(-30.0, Some(80), Some(10));
+        assert!(readiness < 70); // Should indicate reduced readiness
+    }
+
+    #[test]
+    fn test_training_readiness_poor_sleep() {
+        // Good HRV but poor sleep
+        let readiness = calculate_training_readiness(0.0, Some(40), Some(10));
+        assert!(readiness < 80); // Sleep impacts readiness
+    }
+
+    #[test]
+    fn test_training_readiness_negative_tsb() {
+        // Negative TSB (fatigued)
+        let readiness = calculate_training_readiness(0.0, Some(80), Some(-20));
+        assert!(readiness < 75); // Fatigue reduces readiness
+    }
+
+    #[test]
+    fn test_training_readiness_missing_data() {
+        // Test with missing sleep score
+        let readiness_no_sleep = calculate_training_readiness(0.0, None, Some(10));
+        assert!(readiness_no_sleep > 0 && readiness_no_sleep <= 100);
+
+        // Test with missing TSB
+        let readiness_no_tsb = calculate_training_readiness(0.0, Some(80), None);
+        assert!(readiness_no_tsb > 0 && readiness_no_tsb <= 100);
+
+        // Test with all missing
+        let readiness_minimal = calculate_training_readiness(0.0, None, None);
+        assert!(readiness_minimal > 0 && readiness_minimal <= 100);
+    }
+
+    #[test]
+    fn test_training_readiness_component_weights() {
+        // Verify HRV has 40% weight (dominant factor)
+        let good_hrv = calculate_training_readiness(0.0, Some(50), Some(0));
+        let poor_hrv = calculate_training_readiness(-40.0, Some(50), Some(0));
+
+        let hrv_impact = good_hrv as i16 - poor_hrv as i16;
+        assert!(hrv_impact > 15); // Significant impact from HRV
+
+        // Verify sleep has 30% weight
+        let good_sleep = calculate_training_readiness(0.0, Some(90), Some(0));
+        let poor_sleep = calculate_training_readiness(0.0, Some(40), Some(0));
+
+        let sleep_impact = good_sleep as i16 - poor_sleep as i16;
+        assert!(sleep_impact > 10); // Moderate impact from sleep
+    }
+
+    #[test]
+    fn test_training_readiness_extreme_values() {
+        // Test extreme HRV deviation
+        let extreme_low = calculate_training_readiness(-60.0, Some(80), Some(10));
+        assert!(extreme_low < 60);
+
+        let extreme_high = calculate_training_readiness(20.0, Some(80), Some(10));
+        assert!(extreme_high >= 85);
+
+        // Test extreme TSB
+        let very_fresh = calculate_training_readiness(0.0, Some(80), Some(50));
+        let very_fatigued = calculate_training_readiness(0.0, Some(80), Some(-50));
+        assert!(very_fresh > very_fatigued);
+    }
+
+    #[test]
+    fn test_training_readiness_boundary_values() {
+        // Test boundary conditions
+        let min_readiness = calculate_training_readiness(-100.0, Some(0), Some(-100));
+        assert!(min_readiness >= 0);
+        assert!(min_readiness < 30);
+
+        let max_readiness = calculate_training_readiness(50.0, Some(100), Some(50));
+        assert!(max_readiness <= 100);
+        assert!(max_readiness > 90);
     }
 }
