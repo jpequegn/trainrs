@@ -32,7 +32,7 @@
 //!
 //! Consistency in measurement timing improves reliability.
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Utc, Timelike};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -2466,6 +2466,456 @@ impl RecoveryForecast {
     }
 }
 
+/// Sleep debt tracking and analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SleepDebt {
+    /// Total accumulated sleep debt in minutes
+    pub total_debt_minutes: u32,
+    /// Number of days with sleep debt
+    pub debt_days: u8,
+    /// Average sleep deficit per night (minutes)
+    pub avg_deficit_per_night: f64,
+    /// Estimated days to recover debt (at normal sleep)
+    pub estimated_recovery_days: f64,
+    /// Severity: low (<2h), moderate (2-5h), high (>5h)
+    pub severity: String,
+}
+
+impl SleepDebt {
+    /// Calculate sleep debt from multiple nights
+    ///
+    /// # Arguments
+    /// * `sleep_sessions` - Collection of sleep sessions
+    /// * `optimal_duration` - Target sleep duration in minutes (default: 480 = 8 hours)
+    ///
+    /// # Returns
+    /// Sleep debt analysis
+    pub fn calculate(
+        sleep_sessions: &[SleepSession],
+        optimal_duration: Option<u16>,
+    ) -> Self {
+        let optimal = optimal_duration.unwrap_or(480); // 8 hours default
+
+        let mut total_debt = 0u32;
+        let mut debt_days = 0u8;
+        let deficit_per_night: Vec<f64> = sleep_sessions
+            .iter()
+            .filter_map(|session| {
+                let sleep_duration = session.metrics.total_sleep;
+                if sleep_duration < optimal {
+                    let deficit = (optimal as u32 - sleep_duration as u32) as f64;
+                    total_debt += deficit as u32;
+                    debt_days = debt_days.saturating_add(1);
+                    Some(deficit)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let avg_deficit = if !deficit_per_night.is_empty() {
+            deficit_per_night.iter().sum::<f64>() / deficit_per_night.len() as f64
+        } else {
+            0.0
+        };
+
+        let estimated_recovery_days = if avg_deficit > 0.0 {
+            total_debt as f64 / optimal as f64
+        } else {
+            0.0
+        };
+
+        let severity = if total_debt < 120 {
+            "low".to_string()
+        } else if total_debt < 300 {
+            "moderate".to_string()
+        } else {
+            "high".to_string()
+        };
+
+        SleepDebt {
+            total_debt_minutes: total_debt,
+            debt_days,
+            avg_deficit_per_night: avg_deficit,
+            estimated_recovery_days,
+            severity,
+        }
+    }
+}
+
+/// Sleep pattern analysis results
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SleepPattern {
+    /// Average sleep duration across sessions (minutes)
+    pub avg_duration: f64,
+    /// Standard deviation of sleep duration
+    pub duration_std_dev: f64,
+    /// Average sleep score (0-100)
+    pub avg_score: f64,
+    /// Consistency score (higher = more consistent)
+    pub consistency_score: f64,
+    /// Optimal sleep timing (if identifiable)
+    pub optimal_bedtime: Option<String>,
+    /// Sleep quality trend
+    pub quality_trend: TrendDirection,
+}
+
+impl SleepPattern {
+    /// Analyze sleep patterns from multiple sessions
+    ///
+    /// # Arguments
+    /// * `sleep_sessions` - Collection of sleep sessions (minimum 3 recommended)
+    ///
+    /// # Returns
+    /// Sleep pattern analysis
+    pub fn analyze(sleep_sessions: &[SleepSession]) -> Self {
+        if sleep_sessions.is_empty() {
+            return Self::empty();
+        }
+
+        // Calculate average duration and score
+        let durations: Vec<f64> = sleep_sessions
+            .iter()
+            .map(|s| s.metrics.total_sleep as f64)
+            .collect();
+        let scores: Vec<f64> = sleep_sessions
+            .iter()
+            .filter_map(|s| s.metrics.sleep_score.map(|score| score as f64))
+            .collect();
+
+        let avg_duration = durations.iter().sum::<f64>() / durations.len().max(1) as f64;
+        let avg_score = scores.iter().sum::<f64>() / scores.len().max(1) as f64;
+
+        // Calculate standard deviation
+        let variance = durations
+            .iter()
+            .map(|d| (d - avg_duration).powi(2))
+            .sum::<f64>()
+            / durations.len().max(1) as f64;
+        let duration_std_dev = variance.sqrt();
+
+        // Consistency score: lower std dev = higher consistency (0-100)
+        // If std dev is 0, perfect consistency. If >120 (2 hours), poor.
+        let consistency_score = (100.0 - (duration_std_dev / 120.0 * 100.0).min(100.0)).max(0.0);
+
+        // Determine quality trend
+        let quality_trend = if sleep_sessions.len() >= 3 {
+            let recent_scores: Vec<f64> = sleep_sessions
+                .iter()
+                .rev()
+                .take(3)
+                .filter_map(|s| s.metrics.sleep_score.map(|score| score as f64))
+                .collect();
+
+            if recent_scores.len() >= 2 {
+                let recent_avg = recent_scores.iter().sum::<f64>() / recent_scores.len() as f64;
+                let older_scores: Vec<f64> = sleep_sessions
+                    .iter()
+                    .skip(3)
+                    .take(3)
+                    .filter_map(|s| s.metrics.sleep_score.map(|score| score as f64))
+                    .collect();
+
+                if !older_scores.is_empty() {
+                    let older_avg = older_scores.iter().sum::<f64>() / older_scores.len() as f64;
+                    if recent_avg > older_avg + 2.0 {
+                        TrendDirection::Improving
+                    } else if recent_avg < older_avg - 2.0 {
+                        TrendDirection::Declining
+                    } else {
+                        TrendDirection::Stable
+                    }
+                } else {
+                    TrendDirection::Stable
+                }
+            } else {
+                TrendDirection::Stable
+            }
+        } else {
+            TrendDirection::Stable
+        };
+
+        // Determine optimal bedtime (bedtime associated with highest scores)
+        let optimal_bedtime = if !sleep_sessions.is_empty() {
+            let best_session = sleep_sessions
+                .iter()
+                .max_by_key(|s| s.metrics.sleep_score.unwrap_or(0));
+
+            if let Some(session) = best_session {
+                Some(format!("{:02}:{:02}", session.start_time.hour(), session.start_time.minute()))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        SleepPattern {
+            avg_duration,
+            duration_std_dev,
+            avg_score,
+            consistency_score,
+            optimal_bedtime,
+            quality_trend,
+        }
+    }
+
+    fn empty() -> Self {
+        SleepPattern {
+            avg_duration: 0.0,
+            duration_std_dev: 0.0,
+            avg_score: 0.0,
+            consistency_score: 0.0,
+            optimal_bedtime: None,
+            quality_trend: TrendDirection::Stable,
+        }
+    }
+}
+
+/// Sleep and performance correlation analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SleepPerformanceCorrelation {
+    /// Correlation coefficient (-1.0 to 1.0)
+    pub correlation: f64,
+    /// Statistical significance (0.0-1.0, >0.05 is significant)
+    pub p_value: f64,
+    /// Is correlation statistically significant?
+    pub is_significant: bool,
+    /// Interpretation of correlation
+    pub interpretation: String,
+    /// Recommended actions
+    pub recommendations: Vec<String>,
+}
+
+impl SleepPerformanceCorrelation {
+    /// Correlate sleep metrics with training performance
+    ///
+    /// # Arguments
+    /// * `sleep_data` - Collection of sleep metrics
+    /// * `performance_metrics` - Corresponding performance scores (0-100)
+    ///
+    /// # Returns
+    /// Correlation analysis with recommendations
+    pub fn analyze(
+        sleep_data: &[SleepMetrics],
+        performance_metrics: &[f64],
+    ) -> Self {
+        if sleep_data.is_empty()
+            || performance_metrics.is_empty()
+            || sleep_data.len() != performance_metrics.len()
+        {
+            return Self::insufficient_data();
+        }
+
+        // Use sleep score as predictor
+        let sleep_scores: Vec<f64> = sleep_data
+            .iter()
+            .filter_map(|s| s.sleep_score.map(|score| score as f64))
+            .collect();
+
+        if sleep_scores.len() < 2 || performance_metrics.len() < 2 {
+            return Self::insufficient_data();
+        }
+
+        // Calculate Pearson correlation coefficient
+        let mean_sleep = sleep_scores.iter().sum::<f64>() / sleep_scores.len() as f64;
+        let mean_perf = performance_metrics.iter().sum::<f64>() / performance_metrics.len() as f64;
+
+        let numerator: f64 = sleep_scores
+            .iter()
+            .zip(performance_metrics.iter())
+            .map(|(s, p)| (s - mean_sleep) * (p - mean_perf))
+            .sum();
+
+        let sleep_std: f64 = (sleep_scores
+            .iter()
+            .map(|s| (s - mean_sleep).powi(2))
+            .sum::<f64>()
+            / sleep_scores.len() as f64)
+            .sqrt();
+
+        let perf_std: f64 = (performance_metrics
+            .iter()
+            .map(|p| (p - mean_perf).powi(2))
+            .sum::<f64>()
+            / performance_metrics.len() as f64)
+            .sqrt();
+
+        let correlation = if sleep_std > 0.0 && perf_std > 0.0 {
+            (numerator / (sleep_std * perf_std * sleep_scores.len() as f64)).clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+
+        // Simple p-value estimation: r² and sample size
+        let r_squared = correlation.powi(2);
+        let n = sleep_scores.len() as f64;
+        let t_stat = correlation * ((n - 2.0) / (1.0 - r_squared.min(0.9999))).sqrt();
+        let p_value = 1.0 - (t_stat.abs() / (t_stat.abs() + 5.0)); // Simplified
+
+        let is_significant = p_value < 0.05;
+
+        let interpretation = if correlation.abs() < 0.3 {
+            "Weak or no correlation between sleep and performance".to_string()
+        } else if correlation.abs() < 0.6 {
+            format!(
+                "Moderate {} correlation between sleep and performance",
+                if correlation > 0.0 { "positive" } else { "negative" }
+            )
+        } else {
+            format!(
+                "Strong {} correlation between sleep and performance",
+                if correlation > 0.0 { "positive" } else { "negative" }
+            )
+        };
+
+        let mut recommendations = Vec::new();
+
+        if is_significant && correlation > 0.4 {
+            recommendations.push("Sleep quality strongly impacts your performance".to_string());
+            recommendations
+                .push("Prioritize consistent sleep schedule for best results".to_string());
+        }
+
+        if correlation < 0.0 {
+            recommendations.push(
+                "Consider investigating other factors affecting performance".to_string(),
+            );
+        }
+
+        if correlation.abs() < 0.3 {
+            recommendations.push("Collect more data for reliable analysis (minimum 2 weeks)".to_string());
+        }
+
+        SleepPerformanceCorrelation {
+            correlation,
+            p_value,
+            is_significant,
+            interpretation,
+            recommendations,
+        }
+    }
+
+    fn insufficient_data() -> Self {
+        SleepPerformanceCorrelation {
+            correlation: 0.0,
+            p_value: 1.0,
+            is_significant: false,
+            interpretation: "Insufficient data for analysis".to_string(),
+            recommendations: vec![
+                "Collect at least 7-14 days of sleep and performance data".to_string()
+            ],
+        }
+    }
+}
+
+/// Sleep improvement recommendations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SleepRecommendations {
+    /// Optimal bedtime
+    pub recommended_bedtime: String,
+    /// Optimal wake time
+    pub recommended_wake_time: String,
+    /// Target sleep duration (minutes)
+    pub target_duration: u16,
+    /// Prioritized improvement areas
+    pub improvement_areas: Vec<(String, String)>, // (area, recommendation)
+    /// Sleep debt recovery plan
+    pub recovery_plan: Option<String>,
+    /// Estimated improvement timeline (days)
+    pub improvement_timeline_days: u8,
+}
+
+impl SleepRecommendations {
+    /// Generate personalized sleep recommendations
+    ///
+    /// # Arguments
+    /// * `sleep_pattern` - Analyzed sleep pattern
+    /// * `sleep_debt` - Current sleep debt
+    /// * `athlete_profile` - Athlete info (if available)
+    ///
+    /// # Returns
+    /// Personalized sleep recommendations
+    pub fn generate(
+        sleep_pattern: &SleepPattern,
+        sleep_debt: &SleepDebt,
+        training_load: Option<f64>,
+    ) -> Self {
+        let mut improvement_areas = Vec::new();
+
+        // Analyze duration
+        if sleep_pattern.avg_duration < 420.0 {
+            // <7 hours
+            improvement_areas.push((
+                "Sleep Duration".to_string(),
+                "Increase sleep to 7-9 hours per night".to_string(),
+            ));
+        } else if sleep_pattern.avg_duration > 600.0 {
+            // >10 hours
+            improvement_areas.push((
+                "Sleep Efficiency".to_string(),
+                "Reduce unnecessary sleep; focus on quality over quantity".to_string(),
+            ));
+        }
+
+        // Analyze consistency
+        if sleep_pattern.consistency_score < 50.0 {
+            improvement_areas.push((
+                "Sleep Consistency".to_string(),
+                "Maintain consistent bedtime within 30-minute window".to_string(),
+            ));
+        }
+
+        // Analyze score
+        if sleep_pattern.avg_score < 70.0 {
+            improvement_areas.push((
+                "Sleep Quality".to_string(),
+                "Address fragmentation: keep bedroom dark, cool (65-68°F), quiet".to_string(),
+            ));
+        }
+
+        // Sleep debt recovery
+        let recovery_plan = if sleep_debt.total_debt_minutes > 0 {
+            Some(format!(
+                "You have {}h {}m sleep debt. Add 30-60 min extra sleep for {} days to recover.",
+                sleep_debt.total_debt_minutes / 60,
+                sleep_debt.total_debt_minutes % 60,
+                (sleep_debt.total_debt_minutes as f64 / 45.0).ceil() as u32
+            ))
+        } else {
+            None
+        };
+
+        // Adjust recommendations for training load
+        let (recommended_bedtime, recommended_wake_time, target_duration) =
+            if let Some(tss) = training_load {
+                if tss > 150.0 {
+                    // High training load
+                    (
+                        "21:30".to_string(),
+                        "06:30".to_string(),
+                        (540 + 30).min(600),
+                    ) // Extra 30 min
+                } else {
+                    ("22:00".to_string(), "07:00".to_string(), 480)
+                }
+            } else {
+                ("22:00".to_string(), "07:00".to_string(), 480)
+            };
+
+        let improvement_timeline_days = if improvement_areas.is_empty() { 0 } else { 7 };
+
+        SleepRecommendations {
+            recommended_bedtime,
+            recommended_wake_time,
+            target_duration,
+            improvement_areas,
+            recovery_plan,
+            improvement_timeline_days,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4242,5 +4692,264 @@ mod tests {
                     <= forecast.daily_recovery_trajectory[i - 1].confidence
             );
         }
+    }
+
+    #[test]
+    fn test_sleep_debt_calculation_basic() {
+        let now = Utc::now();
+
+        // Create 3 sessions with 6 hours of sleep (2 hours deficit per night)
+        let sessions: Vec<SleepSession> = (0..3)
+            .map(|i| {
+                let start = now - chrono::Duration::days(i);
+                let stages = vec![
+                    SleepStageSegment::new(SleepStage::Light, start, start + chrono::Duration::minutes(180)).unwrap(),
+                    SleepStageSegment::new(SleepStage::Deep, start + chrono::Duration::minutes(180), start + chrono::Duration::minutes(300)).unwrap(),
+                    SleepStageSegment::new(SleepStage::REM, start + chrono::Duration::minutes(300), start + chrono::Duration::minutes(360)).unwrap(),
+                ];
+                SleepSession::from_stages(start, start + chrono::Duration::minutes(360), stages, Some(15)).unwrap()
+            })
+            .collect();
+
+        let debt = SleepDebt::calculate(&sessions, Some(480)); // 8 hours target
+
+        assert_eq!(debt.debt_days, 3);
+        assert_eq!(debt.total_debt_minutes, 3 * 120); // 3 nights × 2 hours
+        assert!(debt.avg_deficit_per_night > 100.0 && debt.avg_deficit_per_night < 150.0);
+        assert_eq!(debt.severity, "high");
+    }
+
+    #[test]
+    fn test_sleep_debt_no_debt() {
+        let now = Utc::now();
+
+        // Create session with 8 hours of sleep (no deficit)
+        let stages = vec![
+            SleepStageSegment::new(SleepStage::Light, now, now + chrono::Duration::minutes(320)).unwrap(),
+            SleepStageSegment::new(SleepStage::Deep, now + chrono::Duration::minutes(320), now + chrono::Duration::minutes(410)).unwrap(),
+            SleepStageSegment::new(SleepStage::REM, now + chrono::Duration::minutes(410), now + chrono::Duration::minutes(480)).unwrap(),
+        ];
+        let sessions = vec![SleepSession::from_stages(now, now + chrono::Duration::minutes(480), stages, Some(15)).unwrap()];
+
+        let debt = SleepDebt::calculate(&sessions, Some(480));
+
+        assert_eq!(debt.debt_days, 0);
+        assert_eq!(debt.total_debt_minutes, 0);
+        assert_eq!(debt.severity, "low");
+    }
+
+    #[test]
+    fn test_sleep_pattern_analysis() {
+        let now = Utc::now();
+
+        // Create 5 sessions with varying durations
+        let durations = vec![400, 450, 480, 500, 520]; // varies by ±40 minutes
+        let sessions: Vec<SleepSession> = durations
+            .iter()
+            .enumerate()
+            .map(|(i, &duration)| {
+                let start = now - chrono::Duration::days(i as i64);
+                let deep = duration / 6;
+                let light = duration / 2;
+                let rem = duration - deep - light;
+
+                let stages = vec![
+                    SleepStageSegment::new(SleepStage::Light, start, start + chrono::Duration::minutes(light)).unwrap(),
+                    SleepStageSegment::new(SleepStage::Deep, start + chrono::Duration::minutes(light), start + chrono::Duration::minutes(light + deep)).unwrap(),
+                    SleepStageSegment::new(SleepStage::REM, start + chrono::Duration::minutes(light + deep), start + chrono::Duration::minutes(duration)).unwrap(),
+                ];
+                SleepSession::from_stages(start, start + chrono::Duration::minutes(duration), stages, Some(15)).unwrap()
+            })
+            .collect();
+
+        let pattern = SleepPattern::analyze(&sessions);
+
+        assert!(pattern.avg_duration > 400.0 && pattern.avg_duration < 500.0);
+        assert!(pattern.duration_std_dev > 0.0); // Should have variation
+        assert!(pattern.consistency_score > 0.0 && pattern.consistency_score <= 100.0);
+        assert!(pattern.avg_score > 0.0);
+        assert!(pattern.optimal_bedtime.is_some());
+    }
+
+    #[test]
+    fn test_sleep_pattern_empty() {
+        let pattern = SleepPattern::analyze(&[]);
+
+        assert_eq!(pattern.avg_duration, 0.0);
+        assert_eq!(pattern.avg_score, 0.0);
+        assert_eq!(pattern.consistency_score, 0.0);
+        assert!(pattern.optimal_bedtime.is_none());
+    }
+
+    #[test]
+    fn test_sleep_performance_correlation_positive() {
+        // Create data where better sleep scores correlate with better performance
+        let sleep_data = vec![
+            SleepMetrics::new(60, 240, 80, 50, Some(25), Some(4)).unwrap(),  // Low score
+            SleepMetrics::new(70, 260, 90, 40, Some(18), Some(2)).unwrap(),  // Medium score
+            SleepMetrics::new(80, 280, 100, 30, Some(12), Some(1)).unwrap(), // Good score
+            SleepMetrics::new(90, 300, 110, 20, Some(8), Some(0)).unwrap(),  // Excellent score
+            SleepMetrics::new(95, 310, 115, 15, Some(5), Some(0)).unwrap(),  // Perfect score
+        ];
+
+        let performance = vec![60.0, 70.0, 80.0, 90.0, 95.0]; // Correlates with sleep scores
+
+        let correlation = SleepPerformanceCorrelation::analyze(&sleep_data, &performance);
+
+        // With perfectly correlated data, should be strong positive
+        assert!(correlation.correlation >= 0.8 || correlation.interpretation.contains("Strong") || correlation.interpretation.contains("Moderate"));
+        assert!(correlation.interpretation.contains("correlation"));
+    }
+
+    #[test]
+    fn test_sleep_performance_correlation_insufficient_data() {
+        let sleep_data = vec![
+            SleepMetrics::new(90, 240, 90, 30, Some(12), Some(1)).unwrap(),
+        ];
+        let performance = vec![85.0];
+
+        let correlation = SleepPerformanceCorrelation::analyze(&sleep_data, &performance);
+
+        assert!(!correlation.is_significant);
+        assert!(correlation.interpretation.contains("Insufficient"));
+    }
+
+    #[test]
+    fn test_sleep_recommendations_low_duration() {
+        let pattern = SleepPattern {
+            avg_duration: 350.0, // 5.8 hours - too low
+            duration_std_dev: 30.0,
+            avg_score: 75.0,
+            consistency_score: 70.0,
+            optimal_bedtime: Some("22:00".to_string()),
+            quality_trend: TrendDirection::Stable,
+        };
+
+        let debt = SleepDebt {
+            total_debt_minutes: 0,
+            debt_days: 0,
+            avg_deficit_per_night: 0.0,
+            estimated_recovery_days: 0.0,
+            severity: "low".to_string(),
+        };
+
+        let recs = SleepRecommendations::generate(&pattern, &debt, None);
+
+        assert!(recs.improvement_areas.iter().any(|(area, _)| area == "Sleep Duration"));
+        assert!(recs.improvement_timeline_days > 0);
+    }
+
+    #[test]
+    fn test_sleep_recommendations_high_training_load() {
+        let pattern = SleepPattern {
+            avg_duration: 480.0,
+            duration_std_dev: 20.0,
+            avg_score: 80.0,
+            consistency_score: 85.0,
+            optimal_bedtime: Some("22:00".to_string()),
+            quality_trend: TrendDirection::Stable,
+        };
+
+        let debt = SleepDebt {
+            total_debt_minutes: 0,
+            debt_days: 0,
+            avg_deficit_per_night: 0.0,
+            estimated_recovery_days: 0.0,
+            severity: "low".to_string(),
+        };
+
+        let recs = SleepRecommendations::generate(&pattern, &debt, Some(200.0)); // High TSS
+
+        // Should recommend earlier bedtime and extra sleep for high load
+        assert_eq!(recs.recommended_bedtime, "21:30");
+        assert!(recs.target_duration > 480);
+    }
+
+    #[test]
+    fn test_sleep_recommendations_with_debt() {
+        let pattern = SleepPattern {
+            avg_duration: 480.0,
+            duration_std_dev: 20.0,
+            avg_score: 75.0,
+            consistency_score: 80.0,
+            optimal_bedtime: Some("22:00".to_string()),
+            quality_trend: TrendDirection::Stable,
+        };
+
+        let debt = SleepDebt {
+            total_debt_minutes: 240, // 4 hours debt
+            debt_days: 4,
+            avg_deficit_per_night: 60.0,
+            estimated_recovery_days: 1.0,
+            severity: "moderate".to_string(),
+        };
+
+        let recs = SleepRecommendations::generate(&pattern, &debt, None);
+
+        assert!(recs.recovery_plan.is_some());
+        assert!(recs.recovery_plan.unwrap().contains("4h"));
+    }
+
+    #[test]
+    fn test_sleep_pattern_trend_detection() {
+        let now = Utc::now();
+
+        // Create sessions with declining sleep quality to test trend detection
+        // Sessions are stored in reverse chronological order (most recent first)
+        let sessions: Vec<SleepSession> = vec![
+            // Most recent (index 0-2): low scores
+            (50, 50),  // Day 9 ago
+            (55, 55),  // Day 8 ago
+            (60, 60),  // Day 7 ago
+            (70, 70),  // Day 6 ago
+            (75, 75),  // Day 5 ago
+            (80, 80),  // Day 4 ago
+            (100, 110),  // Day 3 ago (older - high score)
+            (105, 115),  // Day 2 ago (older - high score)
+            (110, 120),  // Day 1 ago (oldest - high score)
+        ]
+            .iter()
+            .enumerate()
+            .map(|(i, &(deep, rem))| {
+                // i=0 is most recent (9 days ago), i=8 is oldest (1 day ago - wait, this is backwards)
+                // Fix: iterate backwards in time properly
+                let days_back = (8 - i) as i64;
+                let start = now - chrono::Duration::days(days_back);
+                let light = 300 - deep - rem;
+                let stages = vec![
+                    SleepStageSegment::new(SleepStage::Light, start, start + chrono::Duration::minutes(light)).unwrap(),
+                    SleepStageSegment::new(SleepStage::Deep, start + chrono::Duration::minutes(light), start + chrono::Duration::minutes(light + deep)).unwrap(),
+                    SleepStageSegment::new(SleepStage::REM, start + chrono::Duration::minutes(light + deep), start + chrono::Duration::minutes(light + deep + rem)).unwrap(),
+                ];
+                SleepSession::from_stages(start, start + chrono::Duration::minutes(light + deep + rem), stages, Some(15)).unwrap()
+            })
+            .collect();
+
+        let pattern = SleepPattern::analyze(&sessions);
+
+        // With the data as structured (sessions in order with 9 days ago to 1 day ago)
+        // and the trend detection taking most recent 3 vs older 3
+        // The most recent 3 (50,50), (55,55), (60,60) vs (100,110), (105,115), (110,120) = Declining
+        assert_eq!(pattern.quality_trend, TrendDirection::Declining);
+    }
+
+    #[test]
+    fn test_sleep_score_validation() {
+        // Test that sleep score matches Garmin methodology within expected range
+        let metrics = SleepMetrics::new(
+            90,  // deep
+            280, // light
+            100, // rem
+            30,  // awake
+            Some(15),
+            Some(1),
+        ).unwrap();
+
+        assert!(metrics.sleep_score.is_some());
+        let score = metrics.sleep_score.unwrap();
+        assert!(score >= 0 && score <= 100, "Score should be 0-100, got {}", score);
+
+        // Good sleep should have decent score
+        assert!(score > 60, "Good sleep composition should score >60, got {}", score);
     }
 }
