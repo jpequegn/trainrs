@@ -32,7 +32,7 @@
 //!
 //! Consistency in measurement timing improves reliability.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -1544,7 +1544,7 @@ impl RecoveryTrend {
 }
 
 /// Recovery trend direction
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrendDirection {
     /// Recovery improving over time
     Improving,
@@ -1874,6 +1874,596 @@ pub fn calculate_training_readiness(
     let readiness = (hrv_component * 0.4) + (sleep_component * 0.3) + (tsb_component * 0.3);
 
     readiness.round() as u8
+}
+
+// ========================================================================
+// RECOVERY & PMC INTEGRATION - Issue #92
+// ========================================================================
+
+/// Priority level for recovery actions
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RecoveryPriority {
+    /// Critical: Immediate recovery needed
+    Critical,
+    /// High: Significant recovery needed
+    High,
+    /// Moderate: Normal recovery status
+    Moderate,
+    /// Low: Good recovery status
+    Low,
+    /// Optimal: Excellent recovery status
+    Optimal,
+}
+
+impl fmt::Display for RecoveryPriority {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RecoveryPriority::Critical => write!(f, "Critical"),
+            RecoveryPriority::High => write!(f, "High"),
+            RecoveryPriority::Moderate => write!(f, "Moderate"),
+            RecoveryPriority::Low => write!(f, "Low"),
+            RecoveryPriority::Optimal => write!(f, "Optimal"),
+        }
+    }
+}
+
+/// Risk level assessment for overtraining
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RiskLevel {
+    /// Critical risk: Immediate action required
+    Critical,
+    /// High risk: Close monitoring needed
+    High,
+    /// Moderate risk: Monitor closely
+    Moderate,
+    /// Low risk: Normal training
+    Low,
+}
+
+impl fmt::Display for RiskLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RiskLevel::Critical => write!(f, "Critical"),
+            RiskLevel::High => write!(f, "High"),
+            RiskLevel::Moderate => write!(f, "Moderate"),
+            RiskLevel::Low => write!(f, "Low"),
+        }
+    }
+}
+
+/// Enhanced form calculation incorporating recovery metrics with TSB
+///
+/// Combines Training Stress Balance with HRV, sleep, and physiological metrics
+/// for a comprehensive view of athlete readiness.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnhancedForm {
+    /// Overall form score (0-100)
+    pub score: u8,
+    /// Interpretation of the form score
+    pub interpretation: String,
+    /// Training recommendation based on form
+    pub recommendation: String,
+    /// Recovery action priority
+    pub recovery_priority: RecoveryPriority,
+}
+
+impl EnhancedForm {
+    /// Calculate enhanced form combining TSB with recovery metrics
+    ///
+    /// # Arguments
+    /// * `tsb` - Training Stress Balance from PMC (-30 to +30 range typical)
+    /// * `hrv_deviation` - HRV deviation from baseline (percentage, -100 to +100)
+    /// * `sleep_score` - Sleep quality score (0-100)
+    /// * `rhr_current` - Current resting heart rate (bpm)
+    /// * `rhr_baseline` - Baseline resting heart rate (bpm)
+    ///
+    /// # Returns
+    /// Enhanced form with score and recommendations
+    ///
+    /// # Algorithm
+    /// Weighted composite of five factors:
+    /// - TSB (25%): Training load balance
+    /// - HRV (35%): Autonomic nervous system status (dominant factor)
+    /// - Sleep (25%): Recovery quality
+    /// - RHR (15%): Physiological stress indicator
+    ///
+    /// # Sports Science Background
+    /// HRV is given highest weight (35%) because it's the most reliable
+    /// indicator of parasympathetic (recovery) status. Sleep is given 25%
+    /// weight as the primary recovery mechanism. TSB provides training
+    /// context. RHR elevation indicates residual fatigue.
+    pub fn calculate(
+        tsb: i16,
+        hrv_deviation: f64,
+        sleep_score: Option<u8>,
+        rhr_current: Option<u8>,
+        rhr_baseline: Option<u8>,
+    ) -> Self {
+        // TSB component (25% weight)
+        // Scale: TSB +30 = 100, TSB 0 = 60, TSB -30 = 20
+        let tsb_component = {
+            let tsb_f64 = tsb as f64;
+            ((tsb_f64 + 30.0) / 60.0 * 80.0 + 20.0).max(20.0).min(100.0)
+        };
+
+        // HRV component (35% weight - dominant factor)
+        // Deviation: 0% = 100, -30% = 40, -60% = 0
+        let hrv_component = if hrv_deviation >= 0.0 {
+            100.0
+        } else {
+            ((hrv_deviation + 60.0) / 60.0 * 100.0).max(0.0).min(100.0)
+        };
+
+        // Sleep component (25% weight)
+        let sleep_component = sleep_score.unwrap_or(70) as f64;
+
+        // RHR component (15% weight)
+        let rhr_component = if let (Some(current), Some(baseline)) = (rhr_current, rhr_baseline) {
+            let rhr_elevation = ((current as f64 - baseline as f64) / baseline as f64) * 100.0;
+            // 0% elevation = 100 score, 10% = 70 score, 20%+ = 30 score
+            (100.0 - rhr_elevation * 3.0).max(30.0).min(100.0)
+        } else {
+            75.0 // Default if RHR data missing
+        };
+
+        // Weighted composite score
+        let score = (tsb_component * 0.25
+            + hrv_component * 0.35
+            + sleep_component * 0.25
+            + rhr_component * 0.15)
+            .round() as u8;
+
+        // Interpretation and recommendations
+        let (interpretation, recommendation, priority) = Self::interpret_form(score);
+
+        EnhancedForm {
+            score,
+            interpretation,
+            recommendation,
+            recovery_priority: priority,
+        }
+    }
+
+    /// Interpret form score and generate recommendations
+    fn interpret_form(score: u8) -> (String, String, RecoveryPriority) {
+        match score {
+            0..=19 => (
+                "Very poor form - critical fatigue".to_string(),
+                "Priority: Complete rest required. Avoid hard training. Focus on sleep and nutrition."
+                    .to_string(),
+                RecoveryPriority::Critical,
+            ),
+            20..=39 => (
+                "Poor form - significant fatigue".to_string(),
+                "Reduce intensity. Recovery-focused workouts only (easy pace, < 50% FTP)."
+                    .to_string(),
+                RecoveryPriority::High,
+            ),
+            40..=59 => (
+                "Fair form - moderate fatigue".to_string(),
+                "Normal training acceptable. Consider reducing volume 20-30% for next 2-3 days."
+                    .to_string(),
+                RecoveryPriority::Moderate,
+            ),
+            60..=79 => (
+                "Good form - ready to train".to_string(),
+                "Good for structured training and moderate intensity work.".to_string(),
+                RecoveryPriority::Low,
+            ),
+            _ => (
+                "Excellent form - peak readiness".to_string(),
+                "Optimal for hard training, races, and high-intensity intervals."
+                    .to_string(),
+                RecoveryPriority::Optimal,
+            ),
+        }
+    }
+}
+
+/// Recommended training intensity based on recovery status
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrainingRecommendation {
+    /// Complete rest day - critical fatigue
+    RestDay,
+    /// Light recovery work only
+    LightRecovery,
+    /// Moderate intensity training
+    ModerateTraining,
+    /// Hard training and intensity work
+    HardTraining,
+    /// Peak performance - optimal for racing/competition
+    PeakPerformance,
+}
+
+impl fmt::Display for TrainingRecommendation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TrainingRecommendation::RestDay => write!(f, "Rest Day"),
+            TrainingRecommendation::LightRecovery => write!(f, "Light Recovery"),
+            TrainingRecommendation::ModerateTraining => write!(f, "Moderate Training"),
+            TrainingRecommendation::HardTraining => write!(f, "Hard Training"),
+            TrainingRecommendation::PeakPerformance => write!(f, "Peak Performance"),
+        }
+    }
+}
+
+/// Training decision with recommended TSS limits and rationale
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrainingDecision {
+    /// Recommended training level
+    pub recommendation: TrainingRecommendation,
+    /// Maximum recommended TSS for today
+    pub max_tss: u16,
+    /// Minimum recommended TSS (avoid zero)
+    pub min_tss: u16,
+    /// Reasoning behind the recommendation
+    pub rationale: String,
+    /// Overall risk assessment
+    pub risk_level: RiskLevel,
+}
+
+impl TrainingDecision {
+    /// Make training recommendation based on recovery status
+    ///
+    /// # Arguments
+    /// * `readiness_score` - Current training readiness (0-100)
+    /// * `planned_tss` - Planned TSS for the workout
+    /// * `acwr` - Acute:Chronic Workload Ratio (ATL/CTL)
+    ///
+    /// # Returns
+    /// Training decision with TSS limits and rationale
+    pub fn assess(readiness_score: u8, planned_tss: u16, acwr: f64) -> Self {
+        let (recommendation, max_tss, min_tss, rationale, risk_level) =
+            match readiness_score {
+                0..=29 => (
+                    TrainingRecommendation::RestDay,
+                    0,
+                    0,
+                    "Critical fatigue detected. Complete rest recommended.".to_string(),
+                    RiskLevel::Critical,
+                ),
+                30..=49 => (
+                    TrainingRecommendation::LightRecovery,
+                    (planned_tss as f64 * 0.3) as u16,
+                    20,
+                    "Significant fatigue. Recovery-focused workouts only.".to_string(),
+                    RiskLevel::High,
+                ),
+                50..=69 => {
+                    let max = (planned_tss as f64 * 0.8) as u16;
+                    (
+                        TrainingRecommendation::ModerateTraining,
+                        max,
+                        40,
+                        "Moderate fatigue. Normal training acceptable with reduced volume."
+                            .to_string(),
+                        if acwr > 1.3 {
+                            RiskLevel::Moderate
+                        } else {
+                            RiskLevel::Low
+                        },
+                    )
+                }
+                70..=84 => (
+                    TrainingRecommendation::HardTraining,
+                    planned_tss,
+                    50,
+                    "Good recovery. Ready for structured training and intensity work."
+                        .to_string(),
+                    RiskLevel::Low,
+                ),
+                _ => (
+                    TrainingRecommendation::PeakPerformance,
+                    (planned_tss as f64 * 1.1) as u16,
+                    50,
+                    "Excellent recovery. Optimal for races and high-intensity sessions."
+                        .to_string(),
+                    RiskLevel::Low,
+                ),
+            };
+
+        TrainingDecision {
+            recommendation,
+            max_tss,
+            min_tss,
+            rationale,
+            risk_level,
+        }
+    }
+}
+
+/// Overtraining risk assessment combining multiple physiological indicators
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OvertrainingRisk {
+    /// Overall risk level
+    pub risk_level: RiskLevel,
+    /// Acute:Chronic Workload Ratio (ATL/CTL)
+    pub acwr: f64,
+    /// HRV trend direction
+    pub hrv_trend: TrendDirection,
+    /// Accumulated sleep debt in hours
+    pub sleep_debt_hours: f64,
+    /// Percentage of RHR measurements elevated above baseline
+    pub elevated_rhr_percentage: f64,
+    /// Recommended actions
+    pub action_items: Vec<String>,
+    /// Estimated days until recovery (if high risk)
+    pub days_to_recovery: Option<u16>,
+}
+
+impl OvertrainingRisk {
+    /// Assess overtraining risk from multiple indicators
+    ///
+    /// # Arguments
+    /// * `ctl` - Chronic Training Load (fitness)
+    /// * `atl` - Acute Training Load (fatigue)
+    /// * `recent_hrv` - HRV measurements (last 7 days)
+    /// * `sleep_scores` - Sleep quality scores (last 7 days)
+    /// * `rhr_elevations` - RHR deviation percentages (last 7 days)
+    ///
+    /// # Returns
+    /// Comprehensive overtraining risk assessment
+    ///
+    /// # Risk Factors (in order of importance)
+    /// 1. ACWR > 1.5: HIGH RISK
+    /// 2. HRV declining + poor sleep: HIGH RISK
+    /// 3. Multiple risk factors present: ESCALATE
+    /// 4. RHR chronically elevated: MODERATE RISK
+    pub fn assess(
+        ctl: f64,
+        atl: f64,
+        recent_hrv: &[f64],
+        sleep_scores: &[u8],
+        rhr_elevations: &[f64],
+    ) -> Self {
+        // Calculate ACWR (Acute:Chronic Workload Ratio)
+        let acwr = if ctl > 0.0 {
+            atl / ctl
+        } else {
+            0.0
+        };
+
+        // Determine HRV trend
+        let hrv_trend = if recent_hrv.len() >= 3 {
+            let early_hrv = recent_hrv[..recent_hrv.len() / 2].iter().sum::<f64>()
+                / (recent_hrv.len() / 2) as f64;
+            let recent_hrv_avg =
+                recent_hrv[recent_hrv.len() / 2..].iter().sum::<f64>()
+                    / (recent_hrv.len() - recent_hrv.len() / 2) as f64;
+
+            if (recent_hrv_avg - early_hrv) / early_hrv * 100.0 > 5.0 {
+                TrendDirection::Improving
+            } else if (recent_hrv_avg - early_hrv) / early_hrv * 100.0 < -5.0 {
+                TrendDirection::Declining
+            } else {
+                TrendDirection::Stable
+            }
+        } else {
+            TrendDirection::Stable
+        };
+
+        // Calculate sleep debt (optimal = 7.5 hours/night)
+        let avg_sleep = sleep_scores.iter().map(|&s| s as f64).sum::<f64>() / sleep_scores.len() as f64;
+        let sleep_debt_hours = ((75.0 - avg_sleep) / 75.0 * 7.5 * sleep_scores.len() as f64).max(0.0);
+
+        // Calculate percentage of elevated RHR
+        let elevated_rhr_count = rhr_elevations.iter().filter(|&&e| e > 5.0).count();
+        let elevated_rhr_percentage =
+            (elevated_rhr_count as f64 / rhr_elevations.len() as f64) * 100.0;
+
+        // Determine risk level and action items
+        let (risk_level, action_items, days_to_recovery) = Self::assess_risk_level(
+            acwr,
+            hrv_trend,
+            sleep_debt_hours,
+            elevated_rhr_percentage,
+        );
+
+        OvertrainingRisk {
+            risk_level,
+            acwr,
+            hrv_trend,
+            sleep_debt_hours,
+            elevated_rhr_percentage,
+            action_items,
+            days_to_recovery,
+        }
+    }
+
+    /// Assess risk level and generate action items
+    fn assess_risk_level(
+        acwr: f64,
+        hrv_trend: TrendDirection,
+        sleep_debt: f64,
+        elevated_rhr: f64,
+    ) -> (RiskLevel, Vec<String>, Option<u16>) {
+        let mut risk_factors = 0;
+        let mut action_items = Vec::new();
+
+        // ACWR assessment (most important single metric)
+        if acwr > 1.5 {
+            risk_factors += 2; // Double weight
+            action_items.push(
+                "ACWR is high (>1.5). Recent load exceeds chronic fitness level significantly."
+                    .to_string(),
+            );
+        } else if acwr > 1.3 {
+            risk_factors += 1;
+            action_items.push(
+                "ACWR is elevated (>1.3). Monitor closely for overtraining signs.".to_string(),
+            );
+        }
+
+        // HRV trend
+        if hrv_trend == TrendDirection::Declining {
+            risk_factors += 1;
+            action_items.push("HRV is declining. Indicates inadequate recovery.".to_string());
+        }
+
+        // Sleep debt
+        if sleep_debt > 5.0 {
+            risk_factors += 1;
+            action_items.push(format!(
+                "Sleep debt of {:.1} hours. Prioritize sleep for recovery.",
+                sleep_debt
+            ));
+        }
+
+        // Elevated RHR
+        if elevated_rhr > 60.0 {
+            risk_factors += 1;
+            action_items
+                .push("RHR chronically elevated. Sign of residual fatigue.".to_string());
+        }
+
+        // Determine overall risk level
+        let (risk_level, days_recovery) = match risk_factors {
+            0 | 1 => (RiskLevel::Low, None),
+            2 => (RiskLevel::Moderate, Some(2)),
+            3 => (RiskLevel::High, Some(4)),
+            _ => (RiskLevel::Critical, Some(7)),
+        };
+
+        if action_items.is_empty() {
+            action_items.push("No overtraining risk detected. Continue normal training.".to_string());
+        }
+
+        (risk_level, action_items, days_recovery)
+    }
+}
+
+/// Recovery forecast with daily predictions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyRecovery {
+    /// Date of prediction
+    pub date: NaiveDate,
+    /// Predicted readiness score for that day
+    pub predicted_readiness: u8,
+    /// Confidence in prediction (0-100%)
+    pub confidence: u8,
+}
+
+/// Multi-day recovery trajectory forecast
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryForecast {
+    /// Estimated hours until full recovery
+    pub estimated_recovery_hours: f64,
+    /// Predicted date of full recovery
+    pub full_recovery_date: NaiveDate,
+    /// Daily readiness predictions for next 7 days
+    pub daily_recovery_trajectory: Vec<DailyRecovery>,
+    /// Confidence in forecast (0-100%)
+    pub confidence: u8,
+    /// Factors affecting recovery
+    pub factors: Vec<String>,
+}
+
+impl RecoveryForecast {
+    /// Predict recovery trajectory from recent data
+    ///
+    /// # Arguments
+    /// * `current_readiness` - Current readiness score (0-100)
+    /// * `current_tss` - Today's TSS load
+    /// * `atl` - Current Acute Training Load
+    /// * `ctl` - Current Chronic Training Load
+    /// * `sleep_quality` - Average sleep quality (0-100)
+    /// * `hrv_trend` - HRV trend direction
+    ///
+    /// # Returns
+    /// Recovery forecast with daily predictions
+    ///
+    /// # Algorithm
+    /// Base recovery rate: ~1% readiness per hour with good recovery
+    /// Adjustments:
+    /// - ATL/CTL ratio >1.3: slower recovery (-20%)
+    /// - HRV declining: slower recovery (-15%)
+    /// - Sleep poor: slower recovery (-25%)
+    /// - High TSS (>200): longer recovery (+20%)
+    pub fn predict(
+        current_readiness: u8,
+        current_tss: u16,
+        atl: f64,
+        ctl: f64,
+        sleep_quality: u8,
+        hrv_trend: TrendDirection,
+        today: NaiveDate,
+    ) -> Self {
+        // Base recovery rate: 1% per hour = 24% per day
+        let mut recovery_rate = 24.0;
+
+        let mut factors = vec!["Base recovery rate: 24% readiness per day".to_string()];
+
+        // Adjust for ATL/CTL ratio
+        let acwr = if ctl > 0.0 { atl / ctl } else { 0.0 };
+        if acwr > 1.3 {
+            recovery_rate *= 0.8; // 20% slower
+            factors.push("High ACWR reduces recovery rate".to_string());
+        }
+
+        // Adjust for HRV trend
+        if hrv_trend == TrendDirection::Declining {
+            recovery_rate *= 0.85; // 15% slower
+            factors.push("Declining HRV slows recovery".to_string());
+        }
+
+        // Adjust for sleep quality
+        if sleep_quality < 50 {
+            recovery_rate *= 0.75; // 25% slower
+            factors.push("Poor sleep impairs recovery".to_string());
+        }
+
+        // Adjust for TSS load
+        if current_tss > 200 {
+            recovery_rate *= 0.8; // 20% slower for high load
+            factors.push("High TSS requires longer recovery".to_string());
+        }
+
+        // Calculate recovery hours
+        let readiness_needed = 100.0 - current_readiness as f64;
+        let estimated_recovery_hours = readiness_needed / (recovery_rate / 24.0);
+
+        // Full recovery date
+        let recovery_days = (estimated_recovery_hours / 24.0).ceil() as u64;
+        let full_recovery_date =
+            today + chrono::Duration::days(recovery_days as i64);
+
+        // Generate daily predictions
+        let mut daily_trajectory = Vec::new();
+        let mut predicted_readiness = current_readiness as f64;
+        let daily_improvement = recovery_rate / 24.0;
+
+        for day in 0..7 {
+            let date = today + chrono::Duration::days(day as i64);
+            predicted_readiness = (predicted_readiness + daily_improvement).min(100.0);
+
+            // Confidence decreases with forecast length
+            let confidence = (100 - day * 10).max(30) as u8;
+
+            daily_trajectory.push(DailyRecovery {
+                date,
+                predicted_readiness: predicted_readiness as u8,
+                confidence,
+            });
+        }
+
+        // Overall forecast confidence (higher for near-term, lower for poor recovery conditions)
+        let base_confidence = 75u8;
+        let confidence = if acwr > 1.3 {
+            base_confidence.saturating_sub(20)
+        } else if sleep_quality < 50 {
+            base_confidence.saturating_sub(15)
+        } else {
+            base_confidence
+        };
+
+        RecoveryForecast {
+            estimated_recovery_hours,
+            full_recovery_date,
+            daily_recovery_trajectory: daily_trajectory,
+            confidence,
+            factors,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3402,5 +3992,255 @@ mod tests {
         let max_readiness = calculate_training_readiness(50.0, Some(100), Some(50));
         assert!(max_readiness <= 100);
         assert!(max_readiness > 90);
+    }
+
+    // ========================================================================
+    // PMC INTEGRATION TESTS - Issue #92
+    // ========================================================================
+
+    #[test]
+    fn test_enhanced_form_optimal() {
+        // Optimal conditions: good TSB, HRV, sleep, and RHR
+        let form = EnhancedForm::calculate(
+            10,     // Positive TSB
+            5.0,    // Above baseline
+            Some(85),    // Good sleep
+            Some(60),     // Resting HR
+            Some(58),     // Baseline RHR
+        );
+
+        assert!(form.score >= 80);
+        assert_eq!(form.recovery_priority, RecoveryPriority::Optimal);
+        assert!(form.recommendation.contains("hard training"));
+    }
+
+    #[test]
+    fn test_enhanced_form_poor() {
+        // Poor conditions: negative TSB, low HRV, poor sleep, elevated RHR
+        let form = EnhancedForm::calculate(
+            -25,     // Negative TSB (fatigued)
+            -40.0,   // Well below baseline
+            Some(30),     // Poor sleep
+            Some(75),      // Elevated Resting HR
+            Some(58),      // Baseline RHR
+        );
+
+        assert!(form.score < 40);
+        assert_eq!(form.recovery_priority, RecoveryPriority::High);
+        assert!(form.recommendation.contains("Recovery"));
+    }
+
+    #[test]
+    fn test_enhanced_form_missing_data() {
+        // Test with missing RHR data
+        let form = EnhancedForm::calculate(
+            5,
+            -10.0,
+            Some(70),
+            None,  // No RHR
+            None,  // No baseline
+        );
+
+        // Should still produce valid score
+        assert!(form.score > 0 && form.score <= 100);
+    }
+
+    #[test]
+    fn test_training_decision_rest_day() {
+        let decision = TrainingDecision::assess(20, 150, 1.2);
+
+        assert_eq!(decision.recommendation, TrainingRecommendation::RestDay);
+        assert_eq!(decision.risk_level, RiskLevel::Critical);
+        assert_eq!(decision.max_tss, 0);
+    }
+
+    #[test]
+    fn test_training_decision_hard_training() {
+        let decision = TrainingDecision::assess(75, 150, 1.0);
+
+        assert_eq!(decision.recommendation, TrainingRecommendation::HardTraining);
+        assert_eq!(decision.risk_level, RiskLevel::Low);
+        assert_eq!(decision.max_tss, 150);
+    }
+
+    #[test]
+    fn test_training_decision_with_high_acwr() {
+        let decision = TrainingDecision::assess(60, 150, 1.5);
+
+        assert_eq!(decision.recommendation, TrainingRecommendation::ModerateTraining);
+        assert_eq!(decision.risk_level, RiskLevel::Moderate);
+        assert!(decision.max_tss <= 150);
+    }
+
+    #[test]
+    fn test_overtraining_risk_low() {
+        let hrv_data = vec![50.0, 51.0, 52.0, 51.0, 50.0, 49.0, 50.0];
+        let sleep_scores = vec![80, 82, 78, 81, 79, 80, 81];
+        let rhr_elevations = vec![2.0, 1.5, 2.5, 1.0, 2.0, 1.5, 2.0];
+
+        let risk = OvertrainingRisk::assess(100.0, 70.0, &hrv_data, &sleep_scores, &rhr_elevations);
+
+        assert_eq!(risk.risk_level, RiskLevel::Low);
+        assert!(risk.acwr < 1.3);
+    }
+
+    #[test]
+    fn test_overtraining_risk_high() {
+        let hrv_data = vec![50.0, 48.0, 45.0, 42.0, 40.0, 38.0, 35.0]; // Declining
+        let sleep_scores = vec![50, 45, 40, 40, 45, 50, 45]; // Poor
+        let rhr_elevations = vec![8.0, 10.0, 12.0, 11.0, 13.0, 14.0, 15.0]; // Elevated
+
+        let risk = OvertrainingRisk::assess(50.0, 110.0, &hrv_data, &sleep_scores, &rhr_elevations);
+
+        assert!(risk.risk_level == RiskLevel::High || risk.risk_level == RiskLevel::Critical);
+        assert!(risk.acwr > 1.3);
+        assert_eq!(risk.hrv_trend, TrendDirection::Declining);
+    }
+
+    #[test]
+    fn test_overtraining_risk_acwr_high() {
+        // High ACWR with poor recovery signals
+        let hrv_data = vec![50.0, 48.0, 46.0, 45.0, 44.0, 43.0, 42.0]; // Declining HRV
+        let sleep_scores = vec![50, 50, 50, 50, 50, 50, 50]; // Poor sleep
+        let rhr_elevations = vec![8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0]; // Elevated RHR
+
+        let risk = OvertrainingRisk::assess(30.0, 100.0, &hrv_data, &sleep_scores, &rhr_elevations);
+
+        // ACWR = 100/30 = 3.33, very high + multiple other risk factors
+        // With declining HRV, poor sleep, and elevated RHR, should be high or critical
+        assert!(
+            risk.risk_level == RiskLevel::Critical || risk.risk_level == RiskLevel::High,
+            "High ACWR with multiple risk factors should indicate high or critical risk"
+        );
+        assert!(risk.acwr > 1.5);
+    }
+
+    #[test]
+    fn test_recovery_forecast_optimal_conditions() {
+        let today = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+
+        let forecast = RecoveryForecast::predict(
+            75,  // Good readiness (needs 25 points to recover)
+            100, // Moderate TSS
+            40.0, // ATL
+            60.0, // CTL (good ratio)
+            80,  // Good sleep
+            TrendDirection::Improving, // Positive trend
+            today,
+        );
+
+        // Should recover to 100 readiness in reasonable time
+        assert!(forecast.estimated_recovery_hours > 0.0);
+        assert!(forecast.confidence >= 70);
+        assert_eq!(forecast.daily_recovery_trajectory.len(), 7);
+
+        // Readiness should improve or stay same each day
+        for i in 1..forecast.daily_recovery_trajectory.len() {
+            assert!(
+                forecast.daily_recovery_trajectory[i].predicted_readiness
+                    >= forecast.daily_recovery_trajectory[i - 1].predicted_readiness
+            );
+        }
+    }
+
+    #[test]
+    fn test_recovery_forecast_poor_conditions() {
+        let today = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+
+        let forecast = RecoveryForecast::predict(
+            20,  // Poor readiness
+            250, // High TSS
+            110.0, // ATL
+            50.0, // CTL (poor ratio, ACWR=2.2)
+            40,  // Poor sleep
+            TrendDirection::Declining, // Negative trend
+            today,
+        );
+
+        // Should take longer to recover
+        assert!(forecast.estimated_recovery_hours > 48.0);
+        assert!(forecast.confidence < 70);
+        assert!(forecast.factors.iter().any(|f| f.contains("ACWR")));
+        assert!(forecast.factors.iter().any(|f| f.contains("sleep")));
+    }
+
+    #[test]
+    fn test_recovery_priority_display() {
+        assert_eq!(format!("{}", RecoveryPriority::Critical), "Critical");
+        assert_eq!(format!("{}", RecoveryPriority::Optimal), "Optimal");
+    }
+
+    #[test]
+    fn test_risk_level_display() {
+        assert_eq!(format!("{}", RiskLevel::Critical), "Critical");
+        assert_eq!(format!("{}", RiskLevel::Low), "Low");
+    }
+
+    #[test]
+    fn test_training_recommendation_display() {
+        assert_eq!(format!("{}", TrainingRecommendation::RestDay), "Rest Day");
+        assert_eq!(
+            format!("{}", TrainingRecommendation::PeakPerformance),
+            "Peak Performance"
+        );
+    }
+
+    #[test]
+    fn test_enhanced_form_weight_validation() {
+        // Verify that improvements in recovery metrics affect score
+        let base_form = EnhancedForm::calculate(0, -20.0, Some(70), Some(60), Some(58));
+        let better_hrv = EnhancedForm::calculate(0, 10.0, Some(70), Some(60), Some(58));
+        let better_sleep = EnhancedForm::calculate(0, -20.0, Some(85), Some(60), Some(58));
+
+        // HRV improvement from -20% to +10% should increase score
+        let hrv_improvement = better_hrv.score > base_form.score;
+
+        // Better sleep should improve score
+        let sleep_improvement = better_sleep.score > base_form.score;
+
+        assert!(hrv_improvement, "HRV improvement should increase score");
+        assert!(sleep_improvement, "Better sleep should improve score");
+    }
+
+    #[test]
+    fn test_training_decision_light_recovery() {
+        let decision = TrainingDecision::assess(40, 150, 1.0);
+
+        assert_eq!(decision.recommendation, TrainingRecommendation::LightRecovery);
+        assert_eq!(decision.risk_level, RiskLevel::High);
+        assert!(decision.max_tss <= (150.0 * 0.3) as u16 + 1); // Allow 30% of planned
+        assert!(decision.min_tss >= 20);
+    }
+
+    #[test]
+    fn test_overtraining_risk_sleep_debt_calculation() {
+        let hrv_data = vec![50.0; 7];
+        let sleep_scores = vec![40, 40, 40, 40, 40, 40, 40]; // Consistently poor
+        let rhr_elevations = vec![2.0; 7];
+
+        let risk = OvertrainingRisk::assess(100.0, 80.0, &hrv_data, &sleep_scores, &rhr_elevations);
+
+        assert!(risk.sleep_debt_hours > 0.0);
+        assert!(risk.action_items.iter().any(|a| a.contains("Sleep debt")));
+    }
+
+    #[test]
+    fn test_recovery_forecast_accuracy_check() {
+        let today = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+
+        let forecast = RecoveryForecast::predict(
+            75, 100, 50.0, 60.0, 75, TrendDirection::Stable, today,
+        );
+
+        // First day should already have better readiness
+        assert!(forecast.daily_recovery_trajectory[0].predicted_readiness >= 75);
+
+        // Confidence should decrease over time
+        for i in 1..forecast.daily_recovery_trajectory.len() {
+            assert!(
+                forecast.daily_recovery_trajectory[i].confidence
+                    <= forecast.daily_recovery_trajectory[i - 1].confidence
+            );
+        }
     }
 }
