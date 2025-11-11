@@ -10,6 +10,7 @@ pub mod fit_recovery;
 pub mod fit_streaming;
 pub mod gpx;
 pub mod logging;
+pub mod parallel;
 pub mod streaming;
 pub mod tcx;
 pub mod validation;
