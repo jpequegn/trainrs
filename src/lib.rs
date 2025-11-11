@@ -5,6 +5,7 @@ pub mod config;
 pub mod database;
 pub mod data_management;
 pub mod export;
+pub mod formulas;
 pub mod import;
 pub mod models;
 pub mod multisport;
@@ -27,3 +28,7 @@ pub use tss::TssCalculator;
 pub use pmc::PmcCalculator;
 pub use training_effect::TrainingEffectAnalyzer;
 pub use zones::ZoneCalculator;
+pub use formulas::{
+    CalculationConfig, CustomFormula, FormulaEngine, FormulaError, FtpMethod, NormalizedPowerConfig,
+    SmoothingAlgorithm, TssFormula,
+};
