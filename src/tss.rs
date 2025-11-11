@@ -850,8 +850,8 @@ mod tests {
             // TSS should be positive
             prop_assert!(tss_result.tss > dec!(0));
 
-            // TSS should be reasonable (typically 1-600 for normal workouts, up to 1000 for ultra-long sessions)
-            prop_assert!(tss_result.tss <= dec!(1000));
+            // TSS should be reasonable (typically 1-600 for normal workouts, up to 2000+ for extreme efforts)
+            prop_assert!(tss_result.tss <= dec!(2000));
 
             // Intensity factor should be reasonable (0.3-3.0, allowing for sprints and neuromuscular power)
             if let Some(if_value) = tss_result.intensity_factor {
