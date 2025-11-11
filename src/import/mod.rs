@@ -9,6 +9,7 @@ pub mod fit;
 pub mod fit_recovery;
 pub mod fit_streaming;
 pub mod gpx;
+pub mod logging;
 pub mod streaming;
 pub mod tcx;
 pub mod validation;
