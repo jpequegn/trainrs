@@ -29,6 +29,30 @@ mod integration_tests {
     }
 
     fn create_test_workout() -> Workout {
+        // Create sample power data
+        let mut raw_data = Vec::new();
+        for i in 0..3600 {
+            raw_data.push(trainrs::models::DataPoint {
+                timestamp: i,
+                heart_rate: Some(150),
+                power: Some(200),
+                pace: None,
+                elevation: None,
+                cadence: Some(90),
+                speed: None,
+                distance: None,
+                left_power: None,
+                right_power: None,
+                ground_contact_time: None,
+                vertical_oscillation: None,
+                stride_length: None,
+                stroke_count: None,
+                stroke_type: None,
+                lap_number: None,
+                sport_transition: None,
+            });
+        }
+
         Workout {
             id: "test_workout".to_string(),
             athlete_id: Some("test_athlete".to_string()),
@@ -52,7 +76,7 @@ mod integration_tests {
             data_source: DataSource::Power,
             notes: Some("Test workout".to_string()),
             source: None,
-            raw_data: None,
+            raw_data: Some(raw_data),
         }
     }
 
@@ -121,8 +145,16 @@ mod integration_tests {
         running_workout.summary.avg_pace = Some(dec!(5.0)); // 5 min/km pace
         running_workout.data_source = DataSource::Pace;
 
+        // Update raw data for running (pace instead of power)
+        if let Some(ref mut data) = running_workout.raw_data {
+            for point in data.iter_mut() {
+                point.power = None;
+                point.pace = Some(dec!(5.0)); // 5 min/km pace
+            }
+        }
+
         let running_tss = tss::TssCalculator::calculate_pace_tss(&running_workout, &athlete);
-        assert!(running_tss.is_ok());
+        assert!(running_tss.is_ok(), "Running TSS calculation failed: {:?}", running_tss);
     }
 
     /// Test system integration with multiple workouts
