@@ -1,4 +1,4 @@
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use rust_decimal::Decimal;
@@ -9,6 +9,10 @@ use std::path::Path;
 use uuid::Uuid;
 
 use crate::models::{DataPoint, Sport, Workout, WorkoutSummary, WorkoutType, DataSource};
+use crate::recovery::{
+    HrvMeasurement, HrvStatus, SleepSession, SleepMetrics, SleepStageSegment, SleepStage,
+    BodyBatteryData, PhysiologicalMetrics, RecoveryMetrics, RecoveryQuality,
+};
 
 /// Database error types
 #[allow(dead_code)]
@@ -201,6 +205,214 @@ impl Database {
         )?;
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_time_series_workout ON time_series_data (workout_id)",
+            [],
+        )?;
+
+        // Recovery metrics table (daily aggregated recovery data)
+        self.conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS recovery_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date DATE NOT NULL,
+                athlete_id TEXT,
+
+                -- HRV metrics
+                hrv_rmssd REAL,
+                hrv_status TEXT CHECK(hrv_status IN ('Poor', 'Unbalanced', 'Balanced', 'NoReading')),
+                hrv_baseline REAL,
+                hrv_score INTEGER CHECK(hrv_score BETWEEN 0 AND 100),
+
+                -- Sleep metrics
+                sleep_score INTEGER CHECK(sleep_score BETWEEN 0 AND 100),
+                total_sleep_minutes INTEGER,
+                deep_sleep_minutes INTEGER,
+                light_sleep_minutes INTEGER,
+                rem_sleep_minutes INTEGER,
+                awake_minutes INTEGER,
+                sleep_efficiency REAL CHECK(sleep_efficiency BETWEEN 0 AND 100),
+
+                -- Body Battery
+                body_battery_start INTEGER CHECK(body_battery_start BETWEEN 0 AND 100),
+                body_battery_end INTEGER CHECK(body_battery_end BETWEEN 0 AND 100),
+                body_battery_lowest INTEGER CHECK(body_battery_lowest BETWEEN 0 AND 100),
+                body_battery_highest INTEGER CHECK(body_battery_highest BETWEEN 0 AND 100),
+
+                -- Physiological metrics
+                resting_hr INTEGER CHECK(resting_hr BETWEEN 30 AND 120),
+                respiration_rate REAL CHECK(respiration_rate BETWEEN 5 AND 40),
+                stress_score INTEGER CHECK(stress_score BETWEEN 0 AND 100),
+                recovery_time_hours INTEGER,
+
+                -- Composite scores
+                training_readiness INTEGER CHECK(training_readiness BETWEEN 0 AND 100),
+                recovery_quality TEXT CHECK(recovery_quality IN ('Excellent', 'Good', 'Fair', 'Poor')),
+
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+                FOREIGN KEY (athlete_id) REFERENCES athletes(id),
+                UNIQUE(date, athlete_id)
+            )
+            "#,
+            [],
+        )?;
+
+        // HRV measurements table (multiple daily readings)
+        self.conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS hrv_measurements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                athlete_id TEXT,
+                date DATE NOT NULL,
+                measurement_time DATETIME NOT NULL,
+                rmssd REAL NOT NULL CHECK(rmssd BETWEEN 10 AND 200),
+                baseline REAL CHECK(baseline BETWEEN 10 AND 200),
+                status TEXT CHECK(status IN ('Poor', 'Unbalanced', 'Balanced', 'NoReading')),
+                score INTEGER CHECK(score BETWEEN 0 AND 100),
+                context TEXT,
+                source TEXT,
+                metadata TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+                FOREIGN KEY (athlete_id) REFERENCES athletes(id),
+                UNIQUE(athlete_id, measurement_time)
+            )
+            "#,
+            [],
+        )?;
+
+        // Sleep sessions table (detailed sleep tracking)
+        self.conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS sleep_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                athlete_id TEXT,
+                date DATE NOT NULL,
+                start_time DATETIME NOT NULL,
+                end_time DATETIME NOT NULL,
+
+                -- Sleep stage durations (minutes)
+                deep_sleep_minutes INTEGER,
+                light_sleep_minutes INTEGER,
+                rem_sleep_minutes INTEGER,
+                awake_minutes INTEGER,
+
+                -- Sleep metrics
+                total_sleep_minutes INTEGER,
+                sleep_score INTEGER CHECK(sleep_score BETWEEN 0 AND 100),
+                sleep_efficiency REAL CHECK(sleep_efficiency BETWEEN 0 AND 100),
+                sleep_onset_minutes INTEGER,
+                interruptions INTEGER,
+
+                source TEXT,
+                metadata TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+                FOREIGN KEY (athlete_id) REFERENCES athletes(id),
+                UNIQUE(athlete_id, start_time)
+            )
+            "#,
+            [],
+        )?;
+
+        // Sleep stage segments table (detailed stage-by-stage data)
+        self.conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS sleep_stage_segments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                stage TEXT NOT NULL CHECK(stage IN ('Awake', 'Light', 'Deep', 'REM')),
+                start_time DATETIME NOT NULL,
+                end_time DATETIME NOT NULL,
+                duration_minutes INTEGER,
+
+                FOREIGN KEY (session_id) REFERENCES sleep_sessions(id) ON DELETE CASCADE
+            )
+            "#,
+            [],
+        )?;
+
+        // Body Battery events table (energy tracking timeline)
+        self.conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS body_battery_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                athlete_id TEXT,
+                date DATE NOT NULL,
+                timestamp DATETIME NOT NULL,
+                battery_level INTEGER NOT NULL CHECK(battery_level BETWEEN 0 AND 100),
+                drain_rate REAL,
+                charge_rate REAL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+                FOREIGN KEY (athlete_id) REFERENCES athletes(id),
+                UNIQUE(athlete_id, timestamp)
+            )
+            "#,
+            [],
+        )?;
+
+        // Physiological measurements table (resting HR, respiration, stress)
+        self.conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS physiological_measurements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                athlete_id TEXT,
+                date DATE NOT NULL,
+                measurement_time DATETIME NOT NULL,
+                resting_hr INTEGER CHECK(resting_hr BETWEEN 30 AND 120),
+                respiration_rate REAL CHECK(respiration_rate BETWEEN 5 AND 40),
+                pulse_ox INTEGER CHECK(pulse_ox BETWEEN 70 AND 100),
+                stress_score INTEGER CHECK(stress_score BETWEEN 0 AND 100),
+                recovery_time_hours INTEGER,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+                FOREIGN KEY (athlete_id) REFERENCES athletes(id),
+                UNIQUE(athlete_id, measurement_time)
+            )
+            "#,
+            [],
+        )?;
+
+        // Create indexes for recovery tables
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_recovery_metrics_date ON recovery_metrics(date)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_recovery_metrics_athlete_date ON recovery_metrics(athlete_id, date)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_hrv_measurements_date ON hrv_measurements(date)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_hrv_measurements_athlete_time ON hrv_measurements(athlete_id, measurement_time)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sleep_sessions_date ON sleep_sessions(date)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sleep_sessions_athlete_date ON sleep_sessions(athlete_id, date)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_body_battery_date ON body_battery_events(date)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_body_battery_athlete_time ON body_battery_events(athlete_id, timestamp)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_physiological_date ON physiological_measurements(date)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_physiological_athlete_time ON physiological_measurements(athlete_id, measurement_time)",
             [],
         )?;
 
@@ -599,6 +811,308 @@ impl Database {
     /// Clear the in-memory cache
     pub fn clear_cache(&mut self) {
         self.cache.clear();
+    }
+
+    // ============================================================================
+    // Recovery Data CRUD Operations
+    // ============================================================================
+
+    /// Store or update recovery metrics for a specific date
+    pub fn store_recovery_metrics(&mut self, metrics: &RecoveryMetrics, athlete_id: Option<&str>) -> Result<(), DatabaseError> {
+        let tx = self.conn.transaction()?;
+
+        // Extract HRV metrics
+        let (hrv_rmssd, hrv_status, hrv_baseline, hrv_score) = if let Some(hrv) = &metrics.hrv_metrics {
+            (
+                hrv.rmssd,
+                hrv.status.as_ref().map(|s| format!("{:?}", s)),
+                hrv.baseline,
+                hrv.score,
+            )
+        } else {
+            (None, None, None, None)
+        };
+
+        // Extract sleep metrics
+        let (sleep_score, total_sleep, deep_sleep, light_sleep, rem_sleep, awake, sleep_efficiency) =
+            if let Some(sleep) = &metrics.sleep_data {
+                (
+                    sleep.sleep_score.map(|s| s as i64),
+                    Some(sleep.total_sleep as i64),
+                    Some(sleep.deep_sleep as i64),
+                    Some(sleep.light_sleep as i64),
+                    Some(sleep.rem_sleep as i64),
+                    Some(sleep.awake_time as i64),
+                    sleep.sleep_efficiency,
+                )
+            } else {
+                (None, None, None, None, None, None, None)
+            };
+
+        // Extract Body Battery metrics
+        let (bb_start, bb_end, bb_lowest, bb_highest) = if let Some(bb) = &metrics.body_battery {
+            (
+                Some(bb.start_level as i64),
+                Some(bb.end_level as i64),
+                bb.lowest_level.map(|l| l as i64),
+                bb.highest_level.map(|l| l as i64),
+            )
+        } else {
+            (None, None, None, None)
+        };
+
+        // Extract physiological metrics
+        let (resting_hr, resp_rate, stress, recovery_time) = if let Some(phys) = &metrics.physiological {
+            (
+                phys.resting_hr.map(|h| h as i64),
+                phys.respiration_rate,
+                phys.stress_score.map(|s| s as i64),
+                phys.recovery_time.map(|t| t as i64),
+            )
+        } else {
+            (None, None, None, None)
+        };
+
+        // Extract composite scores
+        let training_readiness = metrics.training_readiness.map(|r| r as i64);
+        let recovery_quality = metrics.recovery_quality.as_ref().map(|q| format!("{:?}", q));
+
+        tx.execute(
+            r#"
+            INSERT OR REPLACE INTO recovery_metrics (
+                date, athlete_id,
+                hrv_rmssd, hrv_status, hrv_baseline, hrv_score,
+                sleep_score, total_sleep_minutes, deep_sleep_minutes, light_sleep_minutes,
+                rem_sleep_minutes, awake_minutes, sleep_efficiency,
+                body_battery_start, body_battery_end, body_battery_lowest, body_battery_highest,
+                resting_hr, respiration_rate, stress_score, recovery_time_hours,
+                training_readiness, recovery_quality,
+                updated_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                ?18, ?19, ?20, ?21, ?22, ?23, CURRENT_TIMESTAMP
+            )
+            "#,
+            params![
+                metrics.date.to_string(),
+                athlete_id,
+                hrv_rmssd,
+                hrv_status,
+                hrv_baseline,
+                hrv_score,
+                sleep_score,
+                total_sleep,
+                deep_sleep,
+                light_sleep,
+                rem_sleep,
+                awake,
+                sleep_efficiency,
+                bb_start,
+                bb_end,
+                bb_lowest,
+                bb_highest,
+                resting_hr,
+                resp_rate,
+                stress,
+                recovery_time,
+                training_readiness,
+                recovery_quality,
+            ],
+        )?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Store an HRV measurement
+    pub fn store_hrv_measurement(&mut self, measurement: &HrvMeasurement, athlete_id: Option<&str>) -> Result<i64, DatabaseError> {
+        let date = measurement.timestamp.date_naive();
+        let metadata = measurement.metadata.as_ref().map(|m| serde_json::to_string(m).ok()).flatten();
+
+        self.conn.execute(
+            r#"
+            INSERT INTO hrv_measurements (
+                athlete_id, date, measurement_time, rmssd, baseline, status, score, context, source, metadata
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "#,
+            params![
+                athlete_id,
+                date.to_string(),
+                measurement.timestamp.to_rfc3339(),
+                measurement.rmssd,
+                measurement.baseline,
+                format!("{:?}", measurement.status),
+                measurement.score,
+                measurement.context,
+                measurement.source,
+                metadata,
+            ],
+        )?;
+
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Store a sleep session with stage segments
+    pub fn store_sleep_session(&mut self, session: &SleepSession, athlete_id: Option<&str>) -> Result<i64, DatabaseError> {
+        let tx = self.conn.transaction()?;
+
+        let date = session.start_time.date_naive();
+        let metadata = session.metadata.as_ref().map(|m| serde_json::to_string(m).ok()).flatten();
+
+        // Insert sleep session
+        tx.execute(
+            r#"
+            INSERT INTO sleep_sessions (
+                athlete_id, date, start_time, end_time,
+                deep_sleep_minutes, light_sleep_minutes, rem_sleep_minutes, awake_minutes,
+                total_sleep_minutes, sleep_score, sleep_efficiency, sleep_onset_minutes, interruptions,
+                source, metadata
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+            "#,
+            params![
+                athlete_id,
+                date.to_string(),
+                session.start_time.to_rfc3339(),
+                session.end_time.to_rfc3339(),
+                session.metrics.deep_sleep as i64,
+                session.metrics.light_sleep as i64,
+                session.metrics.rem_sleep as i64,
+                session.metrics.awake_time as i64,
+                session.metrics.total_sleep as i64,
+                session.metrics.sleep_score.map(|s| s as i64),
+                session.metrics.sleep_efficiency,
+                session.metrics.sleep_onset.map(|o| o as i64),
+                session.metrics.interruptions.map(|i| i as i64),
+                session.source,
+                metadata,
+            ],
+        )?;
+
+        let session_id = tx.last_insert_rowid();
+
+        // Insert sleep stage segments
+        for segment in &session.sleep_stages {
+            let duration_minutes = (segment.end_time - segment.start_time).num_minutes();
+            tx.execute(
+                r#"
+                INSERT INTO sleep_stage_segments (
+                    session_id, stage, start_time, end_time, duration_minutes
+                ) VALUES (?1, ?2, ?3, ?4, ?5)
+                "#,
+                params![
+                    session_id,
+                    format!("{:?}", segment.stage),
+                    segment.start_time.to_rfc3339(),
+                    segment.end_time.to_rfc3339(),
+                    duration_minutes,
+                ],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(session_id)
+    }
+
+    /// Store a Body Battery event
+    pub fn store_body_battery_event(&mut self, event: &BodyBatteryData, athlete_id: Option<&str>) -> Result<i64, DatabaseError> {
+        let date = event.timestamp.date_naive();
+
+        self.conn.execute(
+            r#"
+            INSERT INTO body_battery_events (
+                athlete_id, date, timestamp, battery_level, drain_rate, charge_rate
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "#,
+            params![
+                athlete_id,
+                date.to_string(),
+                event.timestamp.to_rfc3339(),
+                event.end_level,
+                event.drain_rate,
+                event.charge_rate,
+            ],
+        )?;
+
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Store a physiological measurement
+    pub fn store_physiological_measurement(&mut self, measurement: &PhysiologicalMetrics, athlete_id: Option<&str>) -> Result<i64, DatabaseError> {
+        let date = measurement.timestamp.date_naive();
+
+        self.conn.execute(
+            r#"
+            INSERT INTO physiological_measurements (
+                athlete_id, date, measurement_time, resting_hr, respiration_rate,
+                pulse_ox, stress_score, recovery_time_hours
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "#,
+            params![
+                athlete_id,
+                date.to_string(),
+                measurement.timestamp.to_rfc3339(),
+                measurement.resting_hr,
+                measurement.respiration_rate,
+                measurement.pulse_ox,
+                measurement.stress_score,
+                measurement.recovery_time,
+            ],
+        )?;
+
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Get recovery metrics for a specific date range
+    pub fn get_recovery_metrics(&self, athlete_id: Option<&str>, start_date: NaiveDate, end_date: NaiveDate) -> Result<Vec<RecoveryMetrics>, DatabaseError> {
+        let query = if athlete_id.is_some() {
+            "SELECT * FROM recovery_metrics WHERE athlete_id = ?1 AND date BETWEEN ?2 AND ?3 ORDER BY date"
+        } else {
+            "SELECT * FROM recovery_metrics WHERE date BETWEEN ?1 AND ?2 ORDER BY date"
+        };
+
+        let mut stmt = self.conn.prepare(query)?;
+
+        let metrics_iter = if let Some(aid) = athlete_id {
+            stmt.query_map(params![aid, start_date.to_string(), end_date.to_string()], Self::row_to_recovery_metrics)?
+        } else {
+            stmt.query_map(params![start_date.to_string(), end_date.to_string()], Self::row_to_recovery_metrics)?
+        };
+
+        let mut metrics = Vec::new();
+        for m in metrics_iter {
+            metrics.push(m?);
+        }
+
+        Ok(metrics)
+    }
+
+    /// Helper function to convert database row to RecoveryMetrics
+    fn row_to_recovery_metrics(row: &Row) -> rusqlite::Result<RecoveryMetrics> {
+        let date_str: String = row.get("date")?;
+        let date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+
+        Ok(RecoveryMetrics {
+            date,
+            hrv_metrics: None, // Simplified - would need full reconstruction
+            sleep_data: None,
+            body_battery: None,
+            physiological: None,
+            training_readiness: row.get::<_, Option<i64>>("training_readiness")?.map(|r| r as u8),
+            recovery_quality: None,
+        })
+    }
+
+    /// Get 7-day recovery trend
+    pub fn get_recovery_trend_7day(&self, athlete_id: Option<&str>, end_date: NaiveDate) -> Result<Vec<RecoveryMetrics>, DatabaseError> {
+        let start_date = end_date - chrono::Duration::days(6);
+        self.get_recovery_metrics(athlete_id, start_date, end_date)
+    }
+
+    /// Get 30-day recovery trend
+    pub fn get_recovery_trend_30day(&self, athlete_id: Option<&str>, end_date: NaiveDate) -> Result<Vec<RecoveryMetrics>, DatabaseError> {
+        let start_date = end_date - chrono::Duration::days(29);
+        self.get_recovery_metrics(athlete_id, start_date, end_date)
     }
 }
 

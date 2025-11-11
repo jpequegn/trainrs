@@ -4,15 +4,20 @@
 pub mod config;
 pub mod database;
 pub mod data_management;
+pub mod device_quirks;
+pub mod error;
 pub mod export;
 pub mod formulas;
 pub mod import;
+pub mod logging;
 pub mod models;
 pub mod multisport;
 pub mod performance;
 pub mod pmc;
 pub mod power;
+pub mod recovery;
 pub mod running;
+pub mod stress_testing;
 pub mod swimming;
 pub mod training_effect;
 pub mod training_plan;
@@ -32,3 +37,6 @@ pub use formulas::{
     CalculationConfig, CustomFormula, FormulaEngine, FormulaError, FtpMethod, NormalizedPowerConfig,
     SmoothingAlgorithm, TssFormula,
 };
+pub use export::ml::{MlCsvExporter, SplitConfig, SplitType};
+pub use error::{TrainRsError, Result};
+pub use logging::{LogConfig, LogLevel, LogFormat, DiagnosticReport};

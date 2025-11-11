@@ -1,7 +1,8 @@
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
+use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId, Throughput, black_box};
 use chrono::NaiveDate;
+use rust_decimal::prelude::FromPrimitive;
 use rust_decimal_macros::dec;
-use trainrs::{models, tss, pmc, zones, power, running, multisport};
+use trainrs::{models, tss, pmc, zones, power, running, multisport, database};
 
 /// Performance benchmarks for training analysis system
 ///
@@ -38,19 +39,21 @@ fn bench_pmc_calculation(c: &mut Criterion) {
     let mut group = c.benchmark_group("PMC Calculation");
 
     let pmc_calculator = pmc::PmcCalculator::new();
-    let pmc_config = pmc::PmcConfig::default();
 
     // Test different dataset sizes
     for &days in &[7, 30, 90, 365] {
         let workouts = create_workout_series(days);
+        let daily_tss = create_daily_tss_map(&workouts);
+        let start_date = workouts.iter().map(|w| w.date).min().unwrap();
+        let end_date = workouts.iter().map(|w| w.date).max().unwrap();
 
         group.throughput(Throughput::Elements(days as u64));
         group.bench_with_input(
             BenchmarkId::new("calculate_pmc_series", days),
-            &workouts,
-            |b, workouts| {
+            &(&daily_tss, start_date, end_date),
+            |b, &(daily_tss, start_date, end_date)| {
                 b.iter(|| {
-                    let _ = pmc_calculator.calculate_pmc_series(workouts, &pmc_config);
+                    let _ = pmc_calculator.calculate_pmc_series(daily_tss, start_date, end_date);
                 });
             },
         );
@@ -72,25 +75,8 @@ fn bench_power_analysis(c: &mut Criterion) {
             &workout,
             |b, workout| {
                 b.iter(|| {
-                    let _ = power::PowerAnalyzer::calculate_power_curve(workout);
-                });
-            },
-        );
-    }
-
-    // Test normalized power calculation
-    for &data_points in &[360, 3600, 36000] { // 6min to 10 hours worth of data
-        let power_data: Vec<rust_decimal::Decimal> = (0..data_points)
-            .map(|i| dec!(200) + rust_decimal::Decimal::from(i % 100))
-            .collect();
-
-        group.throughput(Throughput::Elements(data_points as u64));
-        group.bench_with_input(
-            BenchmarkId::new("normalized_power", data_points),
-            &power_data,
-            |b, data| {
-                b.iter(|| {
-                    let _ = tss::TssCalculator::calculate_normalized_power(data);
+                    let workout_refs = vec![workout];
+                    let _ = power::PowerAnalyzer::calculate_power_curve(&workout_refs, None);
                 });
             },
         );
@@ -119,18 +105,28 @@ fn bench_zone_analysis(c: &mut Criterion) {
                     match workout.sport {
                         models::Sport::Cycling => {
                             if workout.summary.avg_power.is_some() {
-                                let _ = zones::calculate_power_zones(workout, &athlete);
+                                let _ = zones::ZoneCalculator::calculate_power_zones(
+                                    &athlete,
+                                );
                             }
-                            if workout.summary.avg_hr.is_some() {
-                                let _ = zones::calculate_heart_rate_zones(workout, &athlete);
+                            if workout.summary.avg_heart_rate.is_some() {
+                                let _ = zones::ZoneCalculator::calculate_heart_rate_zones(
+                                    &athlete,
+                                    zones::HRZoneMethod::Lthr,
+                                );
                             }
                         },
                         models::Sport::Running => {
-                            if workout.summary.avg_speed.is_some() {
-                                let _ = zones::calculate_pace_zones(workout, &athlete);
+                            if workout.summary.avg_pace.is_some() {
+                                let _ = zones::ZoneCalculator::calculate_pace_zones(
+                                    &athlete,
+                                );
                             }
-                            if workout.summary.avg_hr.is_some() {
-                                let _ = zones::calculate_heart_rate_zones(workout, &athlete);
+                            if workout.summary.avg_heart_rate.is_some() {
+                                let _ = zones::ZoneCalculator::calculate_heart_rate_zones(
+                                    &athlete,
+                                    zones::HRZoneMethod::Lthr,
+                                );
                             }
                         },
                         _ => {}
@@ -144,7 +140,6 @@ fn bench_zone_analysis(c: &mut Criterion) {
 }
 
 fn bench_running_analysis(c: &mut Criterion) {
-    let athlete = create_benchmark_athlete();
     let mut group = c.benchmark_group("Running Analysis");
 
     for &duration in &[1800, 3600, 5400, 7200] { // 30min to 2 hours
@@ -156,7 +151,7 @@ fn bench_running_analysis(c: &mut Criterion) {
             &workout,
             |b, workout| {
                 b.iter(|| {
-                    let _ = running::RunningAnalyzer::analyze_pace(workout, &athlete);
+                    let _ = running::RunningAnalyzer::analyze_pace(workout);
                 });
             },
         );
@@ -184,11 +179,15 @@ fn bench_multisport_analysis(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(num_workouts as u64));
         group.bench_with_input(
-            BenchmarkId::new("combined_load", num_workouts),
+            BenchmarkId::new("workout_aggregation", num_workouts),
             &workouts,
             |b, workouts| {
                 b.iter(|| {
-                    let _ = multisport::calculate_combined_load(workouts);
+                    // Simple aggregation benchmark
+                    let total_tss: rust_decimal::Decimal = workouts.iter()
+                        .filter_map(|w| w.summary.tss)
+                        .sum();
+                    black_box(total_tss);
                 });
             },
         );
@@ -251,7 +250,33 @@ fn bench_memory_usage(c: &mut Criterion) {
     group.finish();
 }
 
+
 // Helper functions for benchmarks
+
+fn create_daily_tss_map(workouts: &[models::Workout]) -> std::collections::BTreeMap<NaiveDate, pmc::DailyTss> {
+    use std::collections::BTreeMap;
+
+    let mut daily_tss: BTreeMap<NaiveDate, pmc::DailyTss> = BTreeMap::new();
+
+    for workout in workouts {
+        let entry = daily_tss.entry(workout.date).or_insert(pmc::DailyTss {
+            date: workout.date,
+            total_tss: rust_decimal::Decimal::ZERO,
+            workout_count: 0,
+            has_workouts: false,
+            workout_tss_values: Vec::new(),
+        });
+
+        if let Some(tss) = workout.summary.tss {
+            entry.total_tss += tss;
+            entry.workout_count += 1;
+            entry.has_workouts = true;
+            entry.workout_tss_values.push(tss);
+        }
+    }
+
+    daily_tss
+}
 
 fn create_benchmark_athlete() -> models::AthleteProfile {
     use chrono::Utc;

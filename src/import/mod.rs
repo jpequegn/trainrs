@@ -6,10 +6,16 @@ use std::path::Path;
 pub mod csv;
 pub mod developer_registry;
 pub mod fit;
+pub mod fit_cache;
+pub mod fit_recovery;
+pub mod fit_streaming;
 pub mod gpx;
+pub mod logging;
+pub mod parallel;
 pub mod streaming;
 pub mod tcx;
 pub mod validation;
+pub mod validation_rules;
 
 /// Trait for importing workout data from different file formats
 pub trait ImportFormat {

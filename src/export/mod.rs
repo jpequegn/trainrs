@@ -1,6 +1,6 @@
-use crate::models::{Workout, AthleteProfile};
-use crate::pmc::{PmcMetrics, PmcCalculator};
-use chrono::{NaiveDate, Datelike};
+use crate::models::{AthleteProfile, Workout};
+use crate::pmc::{PmcCalculator, PmcMetrics};
+use chrono::{Datelike, NaiveDate};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -9,6 +9,8 @@ use thiserror::Error;
 
 pub mod csv;
 pub mod json;
+pub mod ml;
+pub mod pwx;
 pub mod text;
 
 /// Export format types
@@ -19,6 +21,7 @@ pub enum ExportFormat {
     Text,
     Html,
     Pdf,
+    Pwx,
 }
 
 impl ExportFormat {
@@ -29,6 +32,7 @@ impl ExportFormat {
             "text" | "txt" => Ok(ExportFormat::Text),
             "html" => Ok(ExportFormat::Html),
             "pdf" => Ok(ExportFormat::Pdf),
+            "pwx" | "wko5" | "trainingpeaks" => Ok(ExportFormat::Pwx),
             _ => Err(ExportError::UnsupportedFormat(s.to_string())),
         }
     }
@@ -245,12 +249,35 @@ impl ExportManager {
                 csv::export_pmc_data(&pmc_data, output_path)
             }
             (ExportFormat::Json, ExportType::TrainingReport) => {
-                let report = self.generate_training_report(&filtered_workouts, athlete_profile, &options.date_range)?;
+                let report = self.generate_training_report(
+                    &filtered_workouts,
+                    athlete_profile,
+                    &options.date_range,
+                )?;
                 json::export_training_report(&report, output_path)
             }
             (ExportFormat::Text, ExportType::TrainingReport) => {
-                let report = self.generate_training_report(&filtered_workouts, athlete_profile, &options.date_range)?;
+                let report = self.generate_training_report(
+                    &filtered_workouts,
+                    athlete_profile,
+                    &options.date_range,
+                )?;
                 text::export_training_report(&report, output_path)
+            }
+            (ExportFormat::Pwx, ExportType::TrainingPeaksFormat) => {
+                let output = output_path.as_ref();
+                if filtered_workouts.is_empty() {
+                    return Err(ExportError::InsufficientData(
+                        "PWX export requires at least one workout".to_string(),
+                    ));
+                }
+                if filtered_workouts.len() > 1 {
+                    return Err(ExportError::ConfigurationError(
+                        "PWX export supports one workout per file".to_string(),
+                    ));
+                }
+
+                pwx::PwxExporter::export_workout(filtered_workouts[0], output)
             }
             _ => Err(ExportError::UnsupportedFormat(format!(
                 "{:?} format for {:?} export type not yet implemented",
@@ -268,15 +295,23 @@ impl ExportManager {
         let owned_workouts: Vec<Workout> = workouts.iter().map(|&w| w.clone()).collect();
         let daily_tss = self.pmc_calculator.aggregate_daily_tss(&owned_workouts);
 
-        let start_date = _date_range.start.or_else(|| {
-            workouts.iter().map(|w| w.date).min()
-        }).ok_or(ExportError::InsufficientData("No workouts to analyze".to_string()))?;
+        let start_date = _date_range
+            .start
+            .or_else(|| workouts.iter().map(|w| w.date).min())
+            .ok_or(ExportError::InsufficientData(
+                "No workouts to analyze".to_string(),
+            ))?;
 
-        let end_date = _date_range.end.or_else(|| {
-            workouts.iter().map(|w| w.date).max()
-        }).ok_or(ExportError::InsufficientData("No workouts to analyze".to_string()))?;
+        let end_date = _date_range
+            .end
+            .or_else(|| workouts.iter().map(|w| w.date).max())
+            .ok_or(ExportError::InsufficientData(
+                "No workouts to analyze".to_string(),
+            ))?;
 
-        let pmc_series = self.pmc_calculator.calculate_pmc_series(&daily_tss, start_date, end_date)?;
+        let pmc_series = self
+            .pmc_calculator
+            .calculate_pmc_series(&daily_tss, start_date, end_date)?;
         Ok(pmc_series)
     }
 
@@ -330,14 +365,13 @@ impl ExportManager {
         _date_range: &DateRange,
     ) -> Result<TrainingReportSummary, ExportError> {
         if workouts.is_empty() {
-            return Err(ExportError::InsufficientData("No workouts to analyze".to_string()));
+            return Err(ExportError::InsufficientData(
+                "No workouts to analyze".to_string(),
+            ));
         }
 
         let total_workouts = workouts.len() as u16;
-        let total_tss: Decimal = workouts
-            .iter()
-            .filter_map(|w| w.summary.tss)
-            .sum();
+        let total_tss: Decimal = workouts.iter().filter_map(|w| w.summary.tss).sum();
 
         let total_duration_hours: Decimal = workouts
             .iter()
@@ -353,7 +387,9 @@ impl ExportManager {
         // Find most frequent sport
         let mut sport_counts = BTreeMap::new();
         for workout in workouts {
-            *sport_counts.entry(format!("{:?}", workout.sport)).or_insert(0) += 1;
+            *sport_counts
+                .entry(format!("{:?}", workout.sport))
+                .or_insert(0) += 1;
         }
 
         let most_frequent_sport = sport_counts
@@ -367,8 +403,13 @@ impl ExportManager {
         let last_date = workouts.iter().map(|w| w.date).max().unwrap();
         let date_range_days = (last_date - first_date).num_days() as u16 + 1;
 
-        let training_days = workouts.iter().map(|w| w.date).collect::<std::collections::HashSet<_>>().len();
-        let training_consistency = Decimal::from(training_days) / Decimal::from(date_range_days) * Decimal::from(100);
+        let training_days = workouts
+            .iter()
+            .map(|w| w.date)
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        let training_consistency =
+            Decimal::from(training_days) / Decimal::from(date_range_days) * Decimal::from(100);
 
         Ok(TrainingReportSummary {
             total_workouts,
@@ -382,7 +423,10 @@ impl ExportManager {
     }
 
     /// Generate weekly training summaries
-    fn generate_weekly_summaries(&self, workouts: &[&Workout]) -> Result<Vec<WeeklySummary>, ExportError> {
+    fn generate_weekly_summaries(
+        &self,
+        workouts: &[&Workout],
+    ) -> Result<Vec<WeeklySummary>, ExportError> {
         let mut weekly_summaries = Vec::new();
         let mut weekly_data: BTreeMap<(i32, u32), Vec<&Workout>> = BTreeMap::new();
 
@@ -390,13 +434,18 @@ impl ExportManager {
         for workout in workouts {
             let year = workout.date.year();
             let week = workout.date.iso_week().week();
-            weekly_data.entry((year, week)).or_insert_with(Vec::new).push(workout);
+            weekly_data
+                .entry((year, week))
+                .or_insert_with(Vec::new)
+                .push(workout);
         }
 
         // Generate summary for each week
         for ((year, week_num), week_workouts) in weekly_data {
-            let week_start = chrono::NaiveDate::from_isoywd_opt(year, week_num, chrono::Weekday::Mon).unwrap();
-            let week_end = chrono::NaiveDate::from_isoywd_opt(year, week_num, chrono::Weekday::Sun).unwrap();
+            let week_start =
+                chrono::NaiveDate::from_isoywd_opt(year, week_num, chrono::Weekday::Mon).unwrap();
+            let week_end =
+                chrono::NaiveDate::from_isoywd_opt(year, week_num, chrono::Weekday::Sun).unwrap();
 
             let total_tss: Decimal = week_workouts.iter().filter_map(|w| w.summary.tss).sum();
             let workout_count = week_workouts.len() as u16;
@@ -411,7 +460,11 @@ impl ExportManager {
                     .filter_map(|w| w.summary.total_distance)
                     .map(|d| d / Decimal::from(1000)) // Convert meters to km
                     .collect();
-                if distances.is_empty() { None } else { Some(distances.iter().sum()) }
+                if distances.is_empty() {
+                    None
+                } else {
+                    Some(distances.iter().sum())
+                }
             };
 
             let avg_daily_tss = total_tss / Decimal::from(7);
@@ -430,7 +483,8 @@ impl ExportManager {
 
                 entry.workout_count += 1;
                 entry.total_tss += workout.summary.tss.unwrap_or(Decimal::ZERO);
-                entry.total_duration_hours += Decimal::from(workout.duration_seconds) / Decimal::from(3600);
+                entry.total_duration_hours +=
+                    Decimal::from(workout.duration_seconds) / Decimal::from(3600);
             }
 
             weekly_summaries.push(WeeklySummary {
@@ -452,7 +506,10 @@ impl ExportManager {
     }
 
     /// Generate monthly training summaries
-    fn generate_monthly_summaries(&self, workouts: &[&Workout]) -> Result<Vec<MonthlySummary>, ExportError> {
+    fn generate_monthly_summaries(
+        &self,
+        workouts: &[&Workout],
+    ) -> Result<Vec<MonthlySummary>, ExportError> {
         let mut monthly_summaries = Vec::new();
         let mut monthly_data: BTreeMap<(i32, u32), Vec<&Workout>> = BTreeMap::new();
 
@@ -460,7 +517,10 @@ impl ExportManager {
         for workout in workouts {
             let year = workout.date.year();
             let month = workout.date.month();
-            monthly_data.entry((year, month)).or_insert_with(Vec::new).push(workout);
+            monthly_data
+                .entry((year, month))
+                .or_insert_with(Vec::new)
+                .push(workout);
         }
 
         let weekly_summaries = self.generate_weekly_summaries(workouts)?;
@@ -468,11 +528,21 @@ impl ExportManager {
         // Generate summary for each month
         for ((year, month_num), month_workouts) in monthly_data {
             let month_name = match month_num {
-                1 => "January", 2 => "February", 3 => "March", 4 => "April",
-                5 => "May", 6 => "June", 7 => "July", 8 => "August",
-                9 => "September", 10 => "October", 11 => "November", 12 => "December",
+                1 => "January",
+                2 => "February",
+                3 => "March",
+                4 => "April",
+                5 => "May",
+                6 => "June",
+                7 => "July",
+                8 => "August",
+                9 => "September",
+                10 => "October",
+                11 => "November",
+                12 => "December",
                 _ => "Unknown",
-            }.to_string();
+            }
+            .to_string();
 
             let total_tss: Decimal = month_workouts.iter().filter_map(|w| w.summary.tss).sum();
             let workout_count = month_workouts.len() as u16;
@@ -487,7 +557,11 @@ impl ExportManager {
                     .filter_map(|w| w.summary.total_distance)
                     .map(|d| d / Decimal::from(1000))
                     .collect();
-                if distances.is_empty() { None } else { Some(distances.iter().sum()) }
+                if distances.is_empty() {
+                    None
+                } else {
+                    Some(distances.iter().sum())
+                }
             };
 
             let days_in_month = chrono::NaiveDate::from_ymd_opt(year, month_num, 1)
@@ -514,7 +588,8 @@ impl ExportManager {
 
                 entry.workout_count += 1;
                 entry.total_tss += workout.summary.tss.unwrap_or(Decimal::ZERO);
-                entry.total_duration_hours += Decimal::from(workout.duration_seconds) / Decimal::from(3600);
+                entry.total_duration_hours +=
+                    Decimal::from(workout.duration_seconds) / Decimal::from(3600);
             }
 
             // Filter weekly summaries for this month
@@ -602,7 +677,10 @@ mod tests {
 
         let filtered = range.filter_workouts(&workouts);
         assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].date, NaiveDate::from_ymd_opt(2024, 9, 15).unwrap());
+        assert_eq!(
+            filtered[0].date,
+            NaiveDate::from_ymd_opt(2024, 9, 15).unwrap()
+        );
     }
 
     #[test]
