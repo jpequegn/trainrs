@@ -16,6 +16,7 @@ pub mod pmc;
 pub mod power;
 pub mod recovery;
 pub mod running;
+pub mod stress_testing;
 pub mod swimming;
 pub mod training_effect;
 pub mod training_plan;
