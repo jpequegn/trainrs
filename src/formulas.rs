@@ -34,6 +34,10 @@ use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 use std::str::FromStr;
 use evalexpr::ContextWithMutableVariables;
+use serde::{Deserialize, Serialize};
+
+// Configuration file support
+pub mod config;
 
 /// Formula engine errors
 #[derive(Error, Debug)]
@@ -66,7 +70,7 @@ pub enum FormulaError {
 pub type FormulaResult<T> = Result<T, FormulaError>;
 
 /// TSS calculation formula variants
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TssFormula {
     /// Classic TSS: (duration × IF²) × 100
     Classic,
