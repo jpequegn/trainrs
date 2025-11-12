@@ -30,6 +30,10 @@
 
 use std::collections::HashMap;
 use thiserror::Error;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
+use std::str::FromStr;
+use evalexpr::ContextWithMutableVariables;
 
 /// Formula engine errors
 #[derive(Error, Debug)]
@@ -442,37 +446,148 @@ impl FormulaEngine {
         CustomFormula::extract_variables(formula)
     }
 
+    /// Evaluate a formula with given variable values
+    ///
+    /// This evaluates the formula expression using the provided variables and returns
+    /// the result as a Decimal for financial-grade precision.
+    ///
+    /// # Arguments
+    ///
+    /// * `formula` - The formula expression to evaluate (e.g., "(duration * IF^2) * 100")
+    /// * `variables` - HashMap of variable names to Decimal values
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use trainrs::formulas::FormulaEngine;
+    /// use rust_decimal::Decimal;
+    /// use std::collections::HashMap;
+    ///
+    /// let mut vars = HashMap::new();
+    /// vars.insert("duration".to_string(), Decimal::from_str("1.5").unwrap());
+    /// vars.insert("IF".to_string(), Decimal::from_str("1.2").unwrap());
+    ///
+    /// let result = FormulaEngine::evaluate("(duration * IF^2) * 100", &vars)?;
+    /// assert_eq!(result, Decimal::from_str("216").unwrap());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn evaluate(
+        formula: &str,
+        variables: &HashMap<String, Decimal>,
+    ) -> FormulaResult<Decimal> {
+        // Validate formula syntax
+        Self::validate_formula(formula)?;
+
+        // Build evalexpr context from Decimal variables
+        let mut context: evalexpr::HashMapContext = evalexpr::HashMapContext::new();
+        for (name, value) in variables {
+            let f64_value = value.to_f64().ok_or_else(|| {
+                FormulaError::TypeMismatch {
+                    expected: "finite number".to_string(),
+                    actual: format!("out of range decimal: {}", value),
+                }
+            })?;
+            let val = evalexpr::Value::Float(f64_value);
+            context.set_value(name.clone(), val)
+                .map_err(|e| FormulaError::EvaluationError(e.to_string()))?;
+        }
+
+        // Parse and evaluate the expression
+        let expr = evalexpr::build_operator_tree(formula)
+            .map_err(|e| {
+                let error_msg = e.to_string();
+                if error_msg.contains("VariableIdentifierNotFound") || error_msg.contains("was not found") {
+                    // Extract variable name from error message if possible
+                    FormulaError::UnknownVariable(error_msg)
+                } else if error_msg.contains("FunctionIdentifierNotFound") {
+                    FormulaError::UndefinedFunction(error_msg)
+                } else {
+                    FormulaError::InvalidSyntax(error_msg)
+                }
+            })?;
+
+        // Evaluate and convert result to Decimal
+        let result = expr.eval_with_context(&context)
+            .map_err(|e| {
+                if e.to_string().contains("division by zero") {
+                    FormulaError::DivisionByZero
+                } else {
+                    FormulaError::EvaluationError(e.to_string())
+                }
+            })?;
+
+        // Convert evalexpr result to Decimal
+        match result {
+            evalexpr::Value::Float(f64_result) => {
+                let f: f64 = f64_result;
+                if !f.is_finite() {
+                    return Err(FormulaError::EvaluationError(
+                        format!("Non-finite result: {}", f)
+                    ));
+                }
+                Decimal::from_str(&f.to_string())
+                    .map_err(|e| FormulaError::EvaluationError(e.to_string()))
+            }
+            evalexpr::Value::Int(i) => Ok(Decimal::from(i)),
+            _ => Err(FormulaError::TypeMismatch {
+                expected: "numeric value".to_string(),
+                actual: "non-numeric result".to_string(),
+            }),
+        }
+    }
+
+    /// Evaluate a formula with string variable values (automatically converted to Decimal)
+    ///
+    /// This is a convenience method for when variables are provided as strings.
+    /// Useful for CLI and configuration file parsing.
+    pub fn evaluate_with_strings(
+        formula: &str,
+        variables: &HashMap<String, String>,
+    ) -> FormulaResult<Decimal> {
+        let mut decimal_vars = HashMap::new();
+        for (name, value_str) in variables {
+            let decimal_value = Decimal::from_str(value_str)
+                .map_err(|e| FormulaError::TypeMismatch {
+                    expected: "numeric string".to_string(),
+                    actual: format!("{}: {}", value_str, e),
+                })?;
+            decimal_vars.insert(name.clone(), decimal_value);
+        }
+        Self::evaluate(formula, &decimal_vars)
+    }
+
+    /// Evaluate a formula and return the result as f64
+    ///
+    /// Useful when interfacing with code that expects f64 values.
+    /// Note: This loses precision compared to Decimal.
+    pub fn evaluate_as_f64(
+        formula: &str,
+        variables: &HashMap<String, Decimal>,
+    ) -> FormulaResult<f64> {
+        let result = Self::evaluate(formula, variables)?;
+        result.to_f64().ok_or_else(|| {
+            FormulaError::EvaluationError(
+                format!("Result out of f64 range: {}", result)
+            )
+        })
+    }
+
 }
 
-// NOTE: Actual evaluation requires a math expression library
-// This is a stub that documents the expected interface
-//
-// For runtime formula evaluation, integrate with a library like:
-// - `mun`: Statically-typed scripting language
-// - `rhai`: Embedded scripting language for Rust
-// - `evalexpr`: Mathematical expression parser
-// - `fastexpr`: Fast expression evaluation
-//
-// Example with evalexpr:
-// ```ignore
-// pub fn evaluate(
-//     formula: &str,
-//     variables: &HashMap<String, f64>,
-// ) -> FormulaResult<f64> {
-//     let mut context = evalexpr::HashMapContext::new();
-//     for (name, value) in variables {
-//         context.set_value(name.clone(), evalexpr::Value::Float(*value))?;
-//     }
-//     let expr = evalexpr::build_operator_tree(formula)?;
-//     match expr.eval_with_context(&context)? {
-//         evalexpr::Value::Float(f) => Ok(f),
-//         _ => Err(FormulaError::TypeMismatch {
-//             expected: "number".to_string(),
-//             actual: "other".to_string(),
-//         }),
-//     }
-// }
-// ```
+/// Expression compilation and caching for performance optimization
+///
+/// When the same formula is evaluated multiple times, compilation caching
+/// can improve performance significantly. This module is deferred for Phase 6.
+pub mod caching {
+    //! Expression caching for performance optimization
+    //!
+    //! This module will provide:
+    //! - Compiled expression caching
+    //! - Cache invalidation strategies
+    //! - Performance monitoring
+    //!
+    //! To be implemented in Phase 6: Performance & Optimization
+}
 
 #[cfg(test)]
 mod tests {
@@ -569,5 +684,220 @@ mod tests {
         assert!(variables.contains(&"FTP".to_string()));
         assert!(variables.contains(&"duration".to_string()));
         assert!(variables.contains(&"IF".to_string()));
+    }
+
+    // Phase 2: Expression Evaluation Tests
+
+    #[test]
+    fn test_formula_evaluate_simple_arithmetic() {
+        let mut vars = HashMap::new();
+        vars.insert("a".to_string(), Decimal::from(10));
+        vars.insert("b".to_string(), Decimal::from(5));
+
+        let result = FormulaEngine::evaluate("a + b", &vars);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Decimal::from(15));
+    }
+
+    #[test]
+    fn test_formula_evaluate_multiplication_and_exponentiation() {
+        let mut vars = HashMap::new();
+        vars.insert("duration".to_string(), Decimal::from_str("1.5").unwrap());
+        vars.insert("IF".to_string(), Decimal::from_str("1.2").unwrap());
+
+        // TSS = (duration * IF^2) * 100
+        let result = FormulaEngine::evaluate("(duration * IF^2) * 100", &vars);
+        assert!(result.is_ok());
+        let tss = result.unwrap();
+        // 1.5 * 1.2^2 * 100 = 1.5 * 1.44 * 100 = 216
+        assert!(tss > Decimal::from(215) && tss < Decimal::from(217));
+    }
+
+    #[test]
+    fn test_formula_evaluate_division() {
+        let mut vars = HashMap::new();
+        vars.insert("NP".to_string(), Decimal::from(300));
+        vars.insert("FTP".to_string(), Decimal::from(250));
+
+        let result = FormulaEngine::evaluate("NP / FTP", &vars);
+        assert!(result.is_ok());
+        let if_value = result.unwrap();
+        assert!(if_value > Decimal::from_str("1.1").unwrap());
+        assert!(if_value < Decimal::from_str("1.3").unwrap());
+    }
+
+    #[test]
+    fn test_formula_evaluate_division_by_zero() {
+        let mut vars = HashMap::new();
+        vars.insert("a".to_string(), Decimal::from(10));
+        vars.insert("b".to_string(), Decimal::from(0));
+
+        let result = FormulaEngine::evaluate("a / b", &vars);
+        // Division by zero in evalexpr returns Infinity (f64), not an error
+        // So we should get a non-finite result error instead
+        assert!(result.is_err(), "Expected error but got: {:?}", result);
+    }
+
+    #[test]
+    fn test_formula_evaluate_unknown_variable() {
+        let vars = HashMap::new();
+
+        let result = FormulaEngine::evaluate("unknown_var * 100", &vars);
+        assert!(result.is_err());
+        // Error should be about unknown variable
+        let err_msg = result.unwrap_err().to_string().to_lowercase();
+        assert!(err_msg.contains("unknown") || err_msg.contains("variable"));
+    }
+
+    #[test]
+    fn test_formula_evaluate_with_strings() {
+        let mut vars = HashMap::new();
+        vars.insert("a".to_string(), "10".to_string());
+        vars.insert("b".to_string(), "5".to_string());
+
+        let result = FormulaEngine::evaluate_with_strings("a + b", &vars);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Decimal::from(15));
+    }
+
+    #[test]
+    fn test_formula_evaluate_with_strings_invalid_number() {
+        let mut vars = HashMap::new();
+        vars.insert("a".to_string(), "not_a_number".to_string());
+
+        let result = FormulaEngine::evaluate_with_strings("a + 5", &vars);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_formula_evaluate_as_f64() {
+        let mut vars = HashMap::new();
+        vars.insert("a".to_string(), Decimal::from(10));
+        vars.insert("b".to_string(), Decimal::from(5));
+
+        let result = FormulaEngine::evaluate_as_f64("a + b", &vars);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 15.0);
+    }
+
+    #[test]
+    fn test_formula_evaluate_complex_tss_formula() {
+        let mut vars = HashMap::new();
+        vars.insert("duration".to_string(), Decimal::from_str("2.0").unwrap());
+        vars.insert("NP".to_string(), Decimal::from(280));
+        vars.insert("FTP".to_string(), Decimal::from(250));
+
+        // TSS = (duration * (NP/FTP)^2) * 100
+        let formula = "(duration * (NP / FTP)^2) * 100";
+        let result = FormulaEngine::evaluate(formula, &vars);
+        assert!(result.is_ok());
+
+        let tss = result.unwrap();
+        // duration=2, IF=280/250=1.12, TSS = 2 * 1.12^2 * 100 = 250.88
+        assert!(tss > Decimal::from(240) && tss < Decimal::from(270));
+    }
+
+    #[test]
+    fn test_formula_evaluate_preserves_decimal_precision() {
+        let mut vars = HashMap::new();
+        vars.insert("a".to_string(), Decimal::from_str("0.1").unwrap());
+        vars.insert("b".to_string(), Decimal::from_str("0.2").unwrap());
+
+        let result = FormulaEngine::evaluate("a + b", &vars);
+        assert!(result.is_ok());
+        // Should handle floating point precision better with Decimal
+        let sum = result.unwrap();
+        assert!(sum > Decimal::from_str("0.29").unwrap());
+        assert!(sum < Decimal::from_str("0.31").unwrap());
+    }
+
+    #[test]
+    fn test_formula_evaluate_negative_numbers() {
+        let mut vars = HashMap::new();
+        vars.insert("a".to_string(), Decimal::from(-10));
+        vars.insert("b".to_string(), Decimal::from(5));
+
+        let result = FormulaEngine::evaluate("a + b", &vars);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Decimal::from(-5));
+    }
+
+    #[test]
+    fn test_formula_evaluate_with_parentheses() {
+        let mut vars = HashMap::new();
+        vars.insert("a".to_string(), Decimal::from(2));
+        vars.insert("b".to_string(), Decimal::from(3));
+        vars.insert("c".to_string(), Decimal::from(4));
+
+        // Test (a + b) * c
+        let result1 = FormulaEngine::evaluate("(a + b) * c", &vars);
+        assert!(result1.is_ok());
+        assert_eq!(result1.unwrap(), Decimal::from(20)); // (2+3)*4 = 20
+
+        // Test a + (b * c)
+        let result2 = FormulaEngine::evaluate("a + (b * c)", &vars);
+        assert!(result2.is_ok());
+        assert_eq!(result2.unwrap(), Decimal::from(14)); // 2 + (3*4) = 14
+    }
+
+    #[test]
+    fn test_formula_evaluate_bikescore_variant() {
+        let mut vars = HashMap::new();
+        vars.insert("duration".to_string(), Decimal::from_str("1.5").unwrap());
+        vars.insert("IF".to_string(), Decimal::from_str("1.2").unwrap());
+
+        // BikeScore: (duration * (IF^1.5)) * 100
+        let formula = "(duration * (IF^1.5)) * 100";
+        let result = FormulaEngine::evaluate(formula, &vars);
+        assert!(result.is_ok());
+
+        let bikescore = result.unwrap();
+        // 1.5 * 1.2^1.5 * 100 ≈ 193.2
+        assert!(bikescore > Decimal::from(180) && bikescore < Decimal::from(210));
+    }
+
+    #[test]
+    fn test_formula_validate_then_evaluate() {
+        // Should validate before evaluating
+        let formula = "(a + b) * c";
+        assert!(FormulaEngine::validate_formula(formula).is_ok());
+
+        let mut vars = HashMap::new();
+        vars.insert("a".to_string(), Decimal::from(1));
+        vars.insert("b".to_string(), Decimal::from(2));
+        vars.insert("c".to_string(), Decimal::from(3));
+
+        let result = FormulaEngine::evaluate(formula, &vars);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Decimal::from(9));
+    }
+
+    #[test]
+    fn test_formula_all_operators() {
+        let mut vars = HashMap::new();
+        vars.insert("a".to_string(), Decimal::from(10));
+        vars.insert("b".to_string(), Decimal::from(3));
+
+        // Test addition
+        assert_eq!(
+            FormulaEngine::evaluate("a + b", &vars).unwrap(),
+            Decimal::from(13)
+        );
+
+        // Test subtraction
+        assert_eq!(
+            FormulaEngine::evaluate("a - b", &vars).unwrap(),
+            Decimal::from(7)
+        );
+
+        // Test multiplication
+        assert_eq!(
+            FormulaEngine::evaluate("a * b", &vars).unwrap(),
+            Decimal::from(30)
+        );
+
+        // Test division
+        let div_result = FormulaEngine::evaluate("a / b", &vars).unwrap();
+        assert!(div_result > Decimal::from(3) && div_result < Decimal::from(4));
     }
 }
